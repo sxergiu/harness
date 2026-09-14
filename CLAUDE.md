@@ -711,8 +711,8 @@ stopped being true, which is its own lesson about this file.
 Verified against a real protocol-22 server: the board, the range gate, push delivery
 (invariant 3 re-probed — dot-named subscribe, underscore pushes), and one-shot requests.
 
-**Packaging is done but nothing is published.** `@sxergiu/harness` 0.1.0 packs to 12 files
-and ~187 kB, and the tarball was installed into a clean directory and run — the `bin`
+**`@sxergiu/harness` 0.1.0 is published.** It packs to 12 files and ~187 kB, and the tarball
+was installed into a clean directory and run — the `bin`
 resolves, the externals resolve, and it correctly deferred to the running cockpit. The scope
 is the publisher's npm username, given by hand; a scope that is not yours fails at publish
 with a 403. A scoped package defaults to RESTRICTED and stops with a 402 that reads like a
@@ -721,7 +721,27 @@ leaving it on a `--access public` flag that only the first publish is ever remem
 The links it ships — `homepage`, `bugs`, `repository` — all point at the GitHub repo, which
 was private while this was written: publishing ahead of making it public puts three 404s on
 the npm page, and npm shows them to everyone but the owner, whose session resolves them.
-`npm publish` is the human's and has not run.
+`npm publish` is the human's.
+
+**An EXACT pin on a runtime dependency ships that exact version to every consumer forever,
+and 0.1.0 shipped four high advisories that way.** `@fastify/static` was pinned `8.3.0` by
+the original scaffold rather than by any decision, so a caret could never carry a consumer to
+a fix: 8.3.0 is vulnerable to path traversal in directory listing, route-guard bypass via
+encoded path separators, authorization bypass via non-canonical paths, and route-guard bypass
+via path traversal — on a server with no auth whose other routes type into live terminals.
+The visible symptom was none of that. It was a `npm warn deprecated glob@11.1.0` on install,
+from the deprecation its maintainer applies to every superseded major; `@fastify/static` 8
+wants `glob@^11` and 10 wants `^13`, so the warning was the pin showing through. Both are now
+carets (`^10.1.3`, `^5.12.1`) like `ws` always was, which is the house style precisely because
+it is what lets a fix arrive. Verified after the bump: `glob@13.0.6`, zero advisories, and a
+clean-directory install of the tarball warns about nothing.
+**The audit and the tree can disagree, so check the tree.** `npm ls` reported `fast-uri`
+3.1.7/4.1.4 while the files on disk were 3.1.5/4.1.2 — the lockfile had moved and those
+nested copies had not — and reading `npm ls` alone would have called a live advisory fixed.
+`npm audit fix` also declines these: it answers `up to date` and changes nothing, where
+`npm update <name>` takes them to the fixed versions inside the ranges their parents already
+allow. `nanoid` is the same shape and is dev-only — it arrives through `vite` → `postcss` and
+`files` ships `dist` alone, so it never reaches a consumer.
 
 **Both stored files are versioned, and they disagree about what to do with a file they
 cannot read — deliberately.** `projects.json` DISCARDS anything unrecognised, because the

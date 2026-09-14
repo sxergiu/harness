@@ -1,6 +1,6 @@
 {
   "name": "@sxergiu/harness",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "A local browser cockpit for the coding agents running in Herdr",
   "keywords": [
     "herdr",
@@ -59,8 +59,8 @@
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
-    "@fastify/static": "8.3.0",
-    "fastify": "^5.2.0",
+    "@fastify/static": "^10.1.3",
+    "fastify": "^5.12.1",
     "ws": "^8.18.0"
   },
   "devDependencies": {

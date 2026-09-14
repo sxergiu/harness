@@ -715,8 +715,13 @@ Verified against a real protocol-22 server: the board, the range gate, push deli
 and ~187 kB, and the tarball was installed into a clean directory and run — the `bin`
 resolves, the externals resolve, and it correctly deferred to the running cockpit. The scope
 is the publisher's npm username, given by hand; a scope that is not yours fails at publish
-with a 403, and the first publish additionally needs `--access public` or it stops with a
-402 that reads like a paywall and is not one. `npm publish` is the human's and has not run.
+with a 403. A scoped package defaults to RESTRICTED and stops with a 402 that reads like a
+paywall and is not one, so `publishConfig.access` pins it public in the manifest rather than
+leaving it on a `--access public` flag that only the first publish is ever remembered for.
+The links it ships — `homepage`, `bugs`, `repository` — all point at the GitHub repo, which
+was private while this was written: publishing ahead of making it public puts three 404s on
+the npm page, and npm shows them to everyone but the owner, whose session resolves them.
+`npm publish` is the human's and has not run.
 
 **Both stored files are versioned, and they disagree about what to do with a file they
 cannot read — deliberately.** `projects.json` DISCARDS anything unrecognised, because the
@@ -752,4 +757,5 @@ future `os` edit that forgets the runner breaks every build at the first step.
 Remaining before it is something a stranger can rely on: the settings screen has never been
 rendered in a browser.
 
-Nothing in this repo has ever been committed. The human makes every commit.
+The repo is committed and pushed to `github.com/sxergiu/harness`, which is private. The
+human makes every commit.

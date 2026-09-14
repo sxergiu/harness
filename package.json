@@ -1,0 +1,69 @@
+{
+  "name": "@sxergiu/harness",
+  "version": "0.1.0",
+  "description": "A local browser cockpit for the coding agents running in Herdr",
+  "keywords": [
+    "herdr",
+    "claude-code",
+    "coding-agents",
+    "agent-monitoring",
+    "terminal-multiplexer",
+    "dashboard"
+  ],
+  "homepage": "https://github.com/sxergiu/harness#readme",
+  "bugs": {
+    "url": "https://github.com/sxergiu/harness/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sxergiu/harness.git"
+  },
+  "author": "sxergiu",
+  "license": "Apache-2.0",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "os": [
+    "darwin"
+  ],
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md",
+    "USAGE.md"
+  ],
+  "workspaces": [
+    "shared",
+    "server",
+    "web"
+  ],
+  "bin": {
+    "harness": "dist/server.js"
+  },
+  "scripts": {
+    "dev": "concurrently -n server,web -c cyan,magenta \"npm:dev:server\" \"npm:dev:web\"",
+    "dev:server": "npm run dev -w server",
+    "dev:web": "npm run dev -w web",
+    "build": "npm run build:web && npm run build:server",
+    "build:web": "npm run build -w web",
+    "build:server": "esbuild server/src/index.ts --bundle --platform=node --format=esm --target=node20 --outfile=dist/server.js --external:fastify --external:@fastify/static --external:ws --banner:js=\"#!/usr/bin/env node\" && mkdir -p dist/assets && cp server/src/assets/* dist/assets/",
+    "lint": "oxlint server/src web/src shared/src --deny-warnings",
+    "start": "node dist/server.js",
+    "test": "node --import tsx --test server/src/*.test.ts",
+    "prepublishOnly": "npm run lint && npm run typecheck && npm test && npm run build",
+    "stop": "node dist/server.js stop",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@fastify/static": "8.3.0",
+    "fastify": "^5.2.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0",
+    "esbuild": "0.28.1",
+    "oxlint": "^1.82.0",
+    "typescript": "^5.7.2"
+  }
+}

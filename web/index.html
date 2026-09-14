@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>harness</title>
+    <script>
+      // Before first paint, or a light-mode load flashes the dark page while the
+      // bundle is still arriving. This is the ONLY copy of the rule — theme.ts
+      // reads the answer back off the class rather than resolving it again.
+      // Wrapped because a classic script's top-level `var` would land on
+      // `window`. Dark needs no class.
+      (function () {
+        var stored = null;
+        try {
+          stored = localStorage.getItem('harness.theme');
+        } catch (e) {
+          // Blocked storage falls through to the OS below, rather than pinning
+          // the page to dark because a preference could not be read.
+        }
+        var theme = stored === 'light' || stored === 'dark'
+          ? stored
+          : (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+        if (theme === 'light') document.documentElement.classList.add('light');
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

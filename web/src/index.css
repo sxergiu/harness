@@ -1,0 +1,148 @@
+@import "tailwindcss";
+
+:root {
+  color-scheme: dark;
+}
+
+/*
+  LIGHT MODE IS THIS BLOCK AND NOTHING ELSE. No component was touched to add it.
+
+  Tailwind v4 compiles `bg-neutral-950` to `var(--color-neutral-950)`, and an
+  opacity modifier to `color-mix(in oklab, var(--color-teal-700) 35%, …)` inside
+  an `@supports` every current browser takes — so redefining the ramp here
+  retargets all ~250 neutral and ~120 accent class sites at once. The ramp was
+  already being used as a semantic token layer (950 page, 900 panel, 800 border,
+  200/300 ink, 400/500/600 recessive, 700 dimmest); this block only writes down
+  what the other end of it should be. Unlayered rules beat Tailwind's
+  `@layer theme`, so no specificity games are needed.
+
+  Values are NOT the dark ones mirrored. Mirroring L* looks right and measures
+  wrong: contrast is a ratio of luminances, so `text-neutral-700` flipped about
+  the midpoint falls from 2.2 against the page to 1.2 and the dimmest ink very
+  nearly disappears. Every neutral below is solved to hold its OWN dark contrast
+  against the page, so the hierarchy is identical in both themes rather than
+  merely inverted. Ratios in the comments are against the page of that theme.
+*/
+:root.light {
+  color-scheme: light;
+
+  --color-neutral-950: oklch(98.5% 0 none); /* page — off-white, never #fff */
+  --color-neutral-900: oklch(95.1% 0 none); /* panel            1.10 */
+  --color-neutral-800: oklch(89.5% 0 none); /* border, selected 1.31 */
+  --color-neutral-700: oklch(78.2% 0 none); /* dimmest ink      1.91 */
+  --color-neutral-600: oklch(70.2% 0 none); /* recessive ink    2.54 */
+  --color-neutral-500: oklch(57.5% 0 none); /* recessive ink    4.18 */
+  --color-neutral-400: oklch(43.4% 0 none); /*                  7.63 */
+  --color-neutral-300: oklch(29.4% 0 none); /* secondary ink   13.36 */
+  --color-neutral-200: oklch(24.1% 0 none); /* primary ink     15.72 */
+  --color-neutral-100: oklch(17.6% 0 none); /* brightest ink   18.15 */
+
+  /*
+    Accents split cleanly by how each stop is USED, and no hue uses a stop on
+    both sides of the line: 100–600 are ink, dots, borders and low-alpha washes,
+    so they darken; 700–950 are only ever high-alpha washes and the borders on
+    them, so they lighten. Pair-inverting the ink band instead was tried and
+    rejected on measurement — it puts `text-amber-500` at 2.05, and that stop
+    carries the contention and "wrote files while investigating" warnings, which
+    are the one thing that must never pass quietly.
+
+    Ordering within each hue is preserved, so wherever dark makes one stop more
+    prominent than another light does too.
+  */
+  --color-amber-500: oklch(55.5% 0.163 48.998); /* ⚠ warnings      4.84 */
+  --color-amber-400: oklch(47.3% 0.137 46.201); /* error ink, dot  6.83 */
+  --color-amber-300: oklch(41.4% 0.112 45.904); /* on amber wash   8.71 */
+  --color-amber-200: oklch(35% 0.095 45.7); /*     on amber wash  11.23 */
+  --color-amber-100: oklch(27.9% 0.077 45.635); /* on amber wash  14.37 */
+
+  --color-red-500: oklch(57.7% 0.245 27.325); /* failed dot        4.56 */
+  --color-red-400: oklch(50.5% 0.213 27.518); /* error ink         6.15 */
+  --color-red-300: oklch(44.4% 0.177 26.899); /*                   8.02 */
+
+  /*
+    Emerald keeps its deliberate dimness rather than a fixed floor: 600 marks a
+    met goal and a collected result, and dark has it at about half the contrast
+    of 400 (5.40 against 10.24). Light holds the same proportion (2.82 / 5.14),
+    so it stays recessive instead of being promoted to look safe.
+  */
+  --color-emerald-600: oklch(65% 0.16 162.5); /*                   2.82 */
+  --color-emerald-500: oklch(59.6% 0.145 163.225); /*              3.51 */
+  --color-emerald-400: oklch(50.8% 0.118 165.612); /* done dot     5.14 */
+  --color-emerald-300: oklch(43.2% 0.095 166.913); /*              7.26 */
+
+  --color-sky-400: oklch(58.8% 0.158 241.966); /* working dot      3.85 */
+  --color-sky-300: oklch(50% 0.134 242.749); /*   activity ink     5.61 */
+
+  --color-violet-400: oklch(54.1% 0.281 293.009); /*               5.63 */
+  --color-fuchsia-400: oklch(59.1% 0.293 322.896); /* investigate  4.46 */
+  --color-fuchsia-300: oklch(51.8% 0.253 323.949); /*              6.01 */
+  --color-lime-400: oklch(53.2% 0.157 131.589); /*                 4.75 */
+
+  /*
+    Wash band: the banners, and the panels drawn on them. Solved like the
+    neutrals rather than mirrored, and for the same reason — mirroring a stop
+    keeps its colour and loses its COMPOSITE. Mirrored, these fell to 1.10–1.23
+    against the page, which left the ink readable but took the BOX away: the
+    `/clear` confirm strip and the blocked panel's reply input both read as
+    borderless. Ratios are the composite against the page, dark → light; ink on
+    them stays at 7.0–11.6.
+  */
+  --color-amber-700: oklch(59.4% 0.169 91.6); /*  border /60  2.08 → 2.13 */
+  --color-amber-800: oklch(69.5% 0.12 95.7); /*   border /60  1.68 → 1.72 */
+  --color-amber-900: oklch(80.5% 0.112 95.6); /*  banner /40  1.24 → 1.24 */
+  --color-red-900: oklch(84.1% 0.141 25.7); /*    border /60  1.37 → 1.43 */
+
+  /*
+    The two `-950` washes stay mirrored: `bg-amber-950/20` and `bg-red-950/30`
+    measure 1.03 against the page in dark and 1.00 here, so they are decorative
+    in both themes and solving them would draw a box the dark page never had.
+  */
+  --color-amber-950: oklch(98.7% 0.022 95.277);
+  --color-red-950: oklch(97.1% 0.013 17.38);
+
+  /*
+    The five row shades, and the one place a value is not chosen per hue. Their
+    alpha is written into the class names (`/25` at rest, `/35` hovered and
+    selected) and so cannot be tuned here — only the colour can. So each was
+    solved backwards from the composite: pick one pale tint at a single oklch
+    lightness and chroma per hue, then work out what colour reaches it at 35%
+    over the page. Selection is read by brightness, so the five must differ by
+    HUE alone; the composites land within 0.03 luminance of each other, and they
+    hold the row's recessive `text-neutral-600` at 2.02–2.09 against 1.94 for a
+    selected row — the same band dark measures (1.93–2.06 against 1.94).
+
+    Amber and red stay out of the queue here as they do everywhere else.
+  */
+  --color-teal-700: #62d4c4;
+  --color-lime-700: #9cca78;
+  --color-rose-500: #ff9a9c;
+  --color-purple-500: #c9a6fb;
+  --color-indigo-500: #a2b3ff;
+}
+
+body {
+  @apply bg-neutral-950 text-neutral-200 antialiased;
+  /* Dense and terminal-adjacent: this sits beside Herdr, not apart from it. */
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+}
+
+code, pre {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+}
+
+/*
+  The syntax tokens for light mode. `main.tsx` imports the dark theme flat and
+  unscoped, as it always has; nesting the light one under the root class is what
+  keeps exactly one of the two live. Vite inlines the import and flattens the
+  nesting to `:root.light .hljs-keyword`, which outranks the dark theme's bare
+  `.hljs-keyword` on specificity — so this holds wherever it sits in the file
+  and does not depend on load order.
+
+  Only the token colours land: nothing in the app puts the `hljs` class on an
+  element (the highlighter returns spans, and `CodeBlock` styles its own
+  wrapper), so this theme's `.hljs` background and its `pre code.hljs` padding
+  are inert here, exactly as the dark theme's already are.
+*/
+:root.light {
+  @import 'highlight.js/styles/atom-one-light.css';
+}

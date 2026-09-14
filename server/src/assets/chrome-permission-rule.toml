@@ -1,0 +1,18 @@
+[[rules]]
+id = "chrome_extension_permission_prompt"
+state = "blocked"
+priority = 980
+region = "after_last_horizontal_rule"
+visible_blocker = true
+# The Claude in Chrome site-permission dialog shares no phrase with any other
+# blocked rule — no "do you want to proceed?", no "esc to cancel", no enter
+# hint — so every one of them falls through and detection lands on the idle
+# fallback while the agent sits waiting. Gate on the dialog's own header line
+# and its Allow/Deny controls.
+line_regex = ['(?i)^\s*Claude in Chrome wants to\b']
+all = [
+  { any = [
+    { line_regex = ['(?i)^\s*\x{276F}?\s*1\.\s*Allow\b'] },
+    { line_regex = ['(?i)^\s*3\.\s*Deny\b'] },
+  ] },
+]

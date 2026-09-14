@@ -1,0 +1,39 @@
+# The same four commands CLAUDE.md tells a human to run, in the same order, so
+# a green run here means exactly what a green run locally means.
+#
+# `npm test` is the only one that could plausibly need a machine: it touches no
+# Herdr socket, no network and no `~/.claude`, which is the whole selection rule
+# for what lives in that suite — so it says the same thing on a runner as it does
+# on a laptop with nine agents open.
+name: ci
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  check:
+    # macOS because `npm ci` REFUSES to run anywhere else: npm enforces the root
+    # package's `os` field, not just a dependency's, so `os: ["darwin"]` fails an
+    # ubuntu runner at EBADPLATFORM before the first gate. Measured, by setting
+    # the field to win32 on a mac and watching `npm ci --dry-run` refuse.
+    # It is also simply where this runs — the four gates now meet the product.
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          # The floor `package.json` declares. Testing on the oldest supported
+          # version is the point: a newer one would pass over an API that the
+          # engines field promises works.
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      # Last, and not redundant: `dist/` does not rebuild itself, so this is the
+      # only thing that catches a build broken by a change everything above is
+      # happy with — a missing asset in the copy step, say.
+      - run: npm run build

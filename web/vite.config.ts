@@ -2,9 +2,12 @@ import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import tailwind from '@tailwindcss/vite';
 import { fileURLToPath } from 'node:url';
-// Resolved through the workspace symlink rather than the alias below — a config
-// cannot use the aliases it is defining.
-import { DEV_PAGE_PORT } from '@harness/shared';
+// A config cannot use the aliases it is defining, and this one must be RELATIVE
+// as well: Vite bundles a relative import into the config it loads, but leaves a
+// BARE one external for node to import itself — and what node gets handed is a
+// `.ts` file, which it can only parse from 22.6 on. As `@harness/shared` this
+// built on a newer node and failed CI at the floor package.json declares.
+import { DEV_PAGE_PORT } from '../shared/src/index.js';
 
 export default defineConfig({
   plugins: [react(), tailwind()],

@@ -73,8 +73,18 @@ Herdr must be installed and running — this observes it and does nothing on its
 ```sh
 brew install herdr && brew services start herdr
 
+npm install -g @sxergiu/harness
+harness init   # installs the planner subagent and the two commands
+harness
+```
+
+`harness` is the whole command surface: `harness` runs it, `harness stop` ends it, and
+`harness --port <n>` moves it off 4373. From a checkout instead, where you build it
+yourself and `node dist/server.js` stands in for the `harness` on your path:
+
+```sh
 npm install && npm run build
-node dist/server.js init   # installs the planner subagent and the two commands
+node dist/server.js init
 npm start
 ```
 

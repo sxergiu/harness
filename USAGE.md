@@ -6,16 +6,25 @@ Herdr must be running — this cockpit observes it and does nothing on its own. 
 to `$HERDR_SOCKET_PATH`, falling back to `~/.config/herdr/herdr.sock`, so it can be started
 from any terminal, not only from inside a Herdr pane.
 
-It is built against **Herdr protocol 17** and refuses to start against anything else rather
-than misread it. If you see a protocol mismatch in the banner, `herdr api schema --json` is
-the authority and `server/src/herdr.ts` is what needs updating.
+It needs **Herdr protocol 17 or newer**. Below that it refuses to start rather than misread
+fields it depends on, and the banner says so — `brew upgrade herdr`. Above it there is no
+ceiling: a newer Herdr simply runs. One was tried and removed, because it fired on version
+drift rather than on anything broken. `herdr api schema --json` is the authority on what
+your binary actually speaks.
 
 ## Running it
 
 ```sh
-npm install
-npm run build
-harness init     # or: node dist/server.js init
+npm install -g @sxergiu/harness
+harness init
+harness
+```
+
+From a checkout, where `node dist/server.js` stands in for the `harness` on your path:
+
+```sh
+npm install && npm run build
+node dist/server.js init
 npm start
 ```
 

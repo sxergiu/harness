@@ -1,5 +1,11 @@
 # Harness v2 — specification
 
+**This is the design as written before the rewrite, kept for the reasoning behind each
+decision rather than as an account of what runs today.** Everything in the future tense
+here has since happened: the deletions below are done, and the appendix records the system
+as it was probed at Herdr protocol 17. Where this and [CLAUDE.md](CLAUDE.md) disagree about
+current behaviour, CLAUDE.md is the one maintained against the code.
+
 A local-only browser cockpit for [Herdr](https://herdr.dev), the terminal multiplexer
 that already runs the agents. **The harness stops running agents entirely.** It observes
 Herdr and the agents' own transcripts, presents them better than a terminal can, and
@@ -409,7 +415,7 @@ Splitting a pane went with it; a started agent always gets its own tab.
 | Transcripts are pruned on a retention timer | `RECENT` treats a missing file as normal |
 | Subagent transcripts are large (148 KB each) | Collapsed line uses parent metrics only |
 | Session UUID changes on `/clear` | Re-resolve on every `pane_updated` |
-| Herdr protocol may change | Version-check on connect, fail loudly |
+| Herdr protocol may change | Version-check on connect, fail loudly — since replaced by a floor with no ceiling, so a newer Herdr simply runs |
 | No auth | Bind `127.0.0.1` only — unchanged from v1 |
 
 ---

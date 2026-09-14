@@ -88,10 +88,25 @@ node dist/server.js init
 npm start
 ```
 
-`init` is not optional busywork: the rules tell every agent to delegate planning to a
-`planner` subagent, and the board's feature/investigate chips come from two slash commands.
-All three are files in `~/.claude` that this puts there. It never overwrites one you have
-changed.
+### What `init` installs
+
+Three files, and they are what the rest of this leans on: the rules tell every agent to
+delegate planning to a `planner` subagent, and the board's feature/investigate chips are
+read back off whichever of the two commands a session was given.
+
+- **`~/.claude/agents/planner.md`** — a read-only planner subagent. It maps the code that
+  matters, reports the patterns already in use nearby, validates each assumption against
+  the real system and says which it could not, and returns the smallest coherent change.
+  It never edits anything.
+- **`~/.claude/commands/feature.md`** — `/feature <what to build>`. Scope by questioning
+  the human first, then plan, implement, review and file the work as commit-sized
+  changelists. It never commits.
+- **`~/.claude/commands/investigate.md`** — `/investigate <what to look into>`. Read the
+  code and discuss it; the conversation is the output and nothing is written. That is an
+  instruction, not a restriction — if the session writes anyway, the board says so.
+
+They are ordinary Claude Code files, so a hand-started agent gets them too. `init` writes
+only what is missing and never overwrites one you have changed; `--force` replaces them.
 
 One process on `http://127.0.0.1:4373`, which it opens for you. macOS only — not because
 anything here is known to need it, but because nowhere else has ever been run.

@@ -1,5 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { AGENT_SHADES, type AgentRow, type AgentShade, type UsageView, type WorkspaceRow } from '@harness/shared';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  AGENT_SHADES, type AccountKey, type AccountView, type AgentRow, type AgentShade,
+  type KnownAccount, sameAccount, type UsageView, type WorkspaceRow,
+} from '@harness/shared';
 import { ASSIGN, AgentView, PROMPT_ROW_H, nameTone } from './Agent.js';
 import { Settings } from './Settings.js';
 import { ContextMeter, ForkRing, StatusDot, Working } from './Status.js';
@@ -290,6 +293,7 @@ function UsageDock(
   const { post } = useApi();
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState<string | null>(null);
+  const account = useAccount();
 
   /**
    * No pane in the request. The server keeps an agent of its own for this, so
@@ -334,17 +338,27 @@ function UsageDock(
           USAGE
         </button>
         {busy && <span className="animate-pulse text-neutral-600">reading…</span>}
+        {/*
+          In the toggle row rather than above it. This dock's shut height is its
+          own metric — `p-2` and one prompt row — so that its top border and the
+          prompt box's meet as one rule across the window, and a line added above
+          would be the one thing that breaks it. It belongs at the foot either
+          way: the account is what the bars beside it are measuring.
+        */}
+        <AccountLine {...account} />
         {!shut && (
           <button
             onClick={() => void read()}
             disabled={busy}
             title="Read it again"
-            className="ml-auto text-neutral-500 hover:text-neutral-200 disabled:opacity-40"
+            className="text-neutral-500 hover:text-neutral-200 disabled:opacity-40"
           >
             ↻
           </button>
         )}
       </div>
+
+      {account.open && <AccountPanel {...account} />}
 
       {failed && <div className="truncate pb-0.5 text-amber-400" title={failed}>⚠ {failed}</div>}
 
@@ -391,6 +405,287 @@ function UsageDock(
   );
 }
 
+
+// ---------------------------------------------------------------------------
+// Account
+// ---------------------------------------------------------------------------
+
+interface AccountControls {
+  view: AccountView | null;
+  open: boolean;
+  busy: boolean;
+  error: string | null;
+  toggle: () => void;
+  reload: () => void;
+  switchTo: (email: string | null) => void;
+  setLabel: (key: AccountKey, label: string) => void;
+  logout: () => void;
+  abandon: () => void;
+}
+
+/**
+ * Which account the agents are spending, and the way to another one.
+ *
+ * Settings' discipline rather than the board's: one GET, and every write answers
+ * with the whole view, so this holds no opinion of its own about who is signed
+ * in. It is off the heartbeat entirely — the server has to run `claude` to
+ * answer, and the board rebuilds every three seconds.
+ *
+ * The poll is the whole of waiting for a login. The server keeps no timer: a
+ * pending login is finished by somebody reading the view, and this is the
+ * somebody. It stops once the login stalls, which leaves `↻` and `×` — pressing
+ * `↻` after finishing a slow login in the pane is what completes it.
+ */
+function useAccount(): AccountControls {
+  const { get, post } = useApi();
+  const [view, setView] = useState<AccountView | null>(null);
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const reload = useCallback(async (): Promise<void> => {
+    try {
+      setView(await get<AccountView>('/api/account'));
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }, [get]);
+
+  useEffect(() => void reload(), [reload]);
+
+  const waiting = view?.pending != null && !view.pending.stalled;
+  useEffect(() => {
+    if (!waiting) return;
+    const timer = setInterval(() => void reload(), 2_000);
+    return () => clearInterval(timer);
+  }, [waiting, reload]);
+
+  const act = async (path: string, body?: unknown): Promise<void> => {
+    setBusy(true);
+    setError(null);
+    try {
+      setView(await post<AccountView>(path, body));
+    } catch (e) {
+      setError((e as Error).message);
+      // A switch that failed may have left the human logged out, so what the
+      // panel shows next has to come from the server rather than from what it
+      // was showing before the click.
+      void reload();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return {
+    view, open, busy, error,
+    toggle: () => setOpen((o) => !o),
+    reload: () => void reload(),
+    switchTo: (email) => void act('/api/account/switch', { email }),
+    setLabel: ({ email, orgId }, label) => void act('/api/account/label', { email, orgId, label }),
+    logout: () => void act('/api/account/logout'),
+    abandon: () => void act('/api/account/abandon'),
+  };
+}
+
+/**
+ * The account, in one line at the foot of the board. Four states and they read
+ * differently on purpose: signed in, signing in, signed out, and no answer at
+ * all — the last being a `claude` that is not on PATH, which is a fact about
+ * this machine and not about the account.
+ */
+function AccountLine(
+  { view, open, busy, error, reload, toggle }: AccountControls,
+): React.ReactElement {
+  // A failed GET cannot be allowed to remove this line: the panel that would
+  // show the error opens from here, so bailing out takes the error, the retry
+  // and the whole account surface with it for the life of the page. One dropped
+  // fetch — a `tsx watch` respawn is enough — used to do exactly that.
+  if (view === null) {
+    return (
+      <button
+        onClick={reload}
+        className={`ml-auto truncate ${error ? 'text-amber-400' : 'text-neutral-600'}`}
+        title={error ?? 'Reading the account'}
+      >
+        {error ? '⚠ account — retry' : '…'}
+      </button>
+    );
+  }
+
+  const { current, pending, available } = view;
+  const [label, tone] = pending
+    ? pending.stalled
+      ? ['login unfinished', 'text-amber-400']
+      : ['signing in…', 'animate-pulse text-neutral-400']
+    : !available
+      ? ['claude not on PATH', 'text-amber-400']
+      : current
+        ? [current.label ?? current.email, 'text-neutral-500']
+        : ['signed out', 'text-amber-400'];
+
+  return (
+    <button
+      onClick={toggle}
+      disabled={busy}
+      /* The address belongs here once a name can stand in front of it — it is
+         what you check before spending somebody's subscription. */
+      title={current
+        ? `${current.email} · ${current.subscriptionType ?? 'no plan'} ${current.orgName ?? ''}`.trim()
+        : 'Accounts'}
+      className={`ml-auto flex min-w-0 items-center gap-1 disabled:opacity-40 hover:text-neutral-200 ${tone}`}
+    >
+      <span className="truncate">{label}</span>
+      <span className="shrink-0 text-neutral-600">{open ? '▾' : '▸'}</span>
+    </button>
+  );
+}
+
+/**
+ * Every account the cockpit has seen, and one click to each. They are CAPTURED
+ * rather than typed: an account is on this list because it has been signed in
+ * on this machine, which is why a new one joins through `another account…` and
+ * there is no field to type an address into.
+ */
+function AccountPanel(
+  { view, busy, error, switchTo, setLabel, logout, abandon, reload }: AccountControls,
+): React.ReactElement | null {
+  if (view === null) return null;
+  const { current, known, pending } = view;
+
+  return (
+    <div className="mb-1 border-b border-neutral-800 pb-1">
+      {error && <div className="truncate pb-0.5 text-amber-400" title={error}>⚠ {error}</div>}
+
+      {pending ? (
+        /*
+          The one state where the cockpit cannot finish the job. The browser is
+          where the login is completed, and until it is, this machine is signed
+          out of everything — so the panel says that rather than showing an empty
+          account line and letting it be discovered by an agent failing.
+        */
+        <div className="py-0.5">
+          <div className={pending.stalled ? 'text-amber-400' : 'text-neutral-400'}>
+            {pending.stalled
+              ? 'the login has not finished — complete it in the login pane, then ↻'
+              : `finish signing in${pending.email ? ` as ${pending.email}` : ''} — a browser has opened, and the login pane is in Herdr`}
+          </div>
+          <div className="mt-0.5 flex items-center gap-3">
+            <button onClick={reload} disabled={busy} className="text-neutral-400 hover:text-neutral-200 disabled:opacity-40">
+              ↻ check
+            </button>
+            <button onClick={abandon} disabled={busy} className="text-neutral-500 hover:text-amber-400 disabled:opacity-40">
+              × give up and close the pane
+            </button>
+          </div>
+        </div>
+      ) : (
+        <>
+          {/* Keyed on the ACCOUNT: one address holds two of them, so the email
+              is not unique and cannot be the key. */}
+          {known.map((a) => (
+            <AccountRow
+              key={`${a.email}:${a.orgId ?? ''}`}
+              account={a}
+              live={current !== null && sameAccount(a, current)}
+              busy={busy}
+              onSwitch={() => switchTo(a.email)}
+              onLabel={(label) => setLabel(a, label)}
+            />
+          ))}
+          <div className="mt-0.5 flex items-center gap-3">
+            <button onClick={() => switchTo(null)} disabled={busy} className="text-neutral-400 hover:text-neutral-200 disabled:opacity-40">
+              + another account
+            </button>
+            {current && (
+              <button onClick={logout} disabled={busy} className="ml-auto text-neutral-600 hover:text-amber-400 disabled:opacity-40">
+                log out
+              </button>
+            )}
+          </div>
+        </>
+      )}
+
+      {/*
+        Stated wherever the switch is, not only while one is running: nothing
+        here stops, restarts or prompts an agent, and what a switch does to one
+        already mid-request is not something the cockpit can see.
+      */}
+      <div className="pt-1 text-neutral-600">
+        Running agents are not touched, and may fail their next request.
+      </div>
+    </div>
+  );
+}
+
+/**
+ * One account, under whatever the human calls it.
+ *
+ * The NAME is the row, and the address is the fallback rather than the subject:
+ * two accounts at one address are the ordinary case, and neither the
+ * organization nor the plan can be relied on to tell them apart — a real one
+ * here reports `orgName: null`, and two accounts can share a plan. A name
+ * someone chose is the only label guaranteed to distinguish them, so the row is
+ * renamed the way a space or an agent is, with `NameEditor` and a hover `✎`.
+ */
+function AccountRow(
+  { account, live, busy, onSwitch, onLabel }: {
+    account: KnownAccount;
+    live: boolean;
+    busy: boolean;
+    onSwitch: () => void;
+    onLabel: (label: string) => void;
+  },
+): React.ReactElement {
+  const [renaming, setRenaming] = useState(false);
+
+  if (renaming) {
+    return (
+      <div className="py-0.5">
+        <NameEditor
+          name={account.label ?? ''}
+          onSave={(label) => { setRenaming(false); onLabel(label); }}
+          onCancel={() => setRenaming(false)}
+        />
+      </div>
+    );
+  }
+
+  const org = `${account.subscriptionType ?? ''} ${account.orgName ?? ''}`.trim();
+  return (
+    <div className="group/acct flex items-center gap-2 py-0.5">
+      <span
+        className={`max-w-[55%] shrink-0 truncate ${live ? 'text-neutral-300' : 'text-neutral-500'}`}
+        title={account.email}
+      >
+        {account.label ?? account.email}
+      </span>
+      <span className="min-w-0 flex-1 truncate text-neutral-700" title={account.email}>
+        {org}
+      </span>
+      {live ? (
+        <span className="shrink-0 text-neutral-600">live</span>
+      ) : (
+        <button
+          onClick={onSwitch}
+          disabled={busy}
+          title={`Sign out and sign in as ${account.email}`}
+          /* No `disabled:opacity-40` beside the `opacity-0`: the disabled rule
+             is emitted later and wins, so every hidden button would fade into
+             view while one is busy. */
+          className="shrink-0 text-neutral-600 opacity-0 group-hover/acct:opacity-100 hover:text-neutral-200"
+        >
+          ⇄ switch
+        </button>
+      )}
+      <IconButton
+        label="✎"
+        title="Name this profile. Empty restores the address."
+        onClick={() => setRenaming(true)}
+        className="shrink-0 opacity-0 group-hover/acct:opacity-100"
+      />
+    </div>
+  );
+}
 
 /**
  * The same thresholds the context meter uses; a limit is a limit. The bar fill

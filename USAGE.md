@@ -3,11 +3,14 @@
 ## Prerequisites
 
 Herdr must be running — this cockpit observes it and does nothing on its own. It connects
-to `$HERDR_SOCKET_PATH`, falling back to `~/.config/herdr/herdr.sock`, so it can be started
-from any terminal, not only from inside a Herdr pane.
+to `$HERDR_SOCKET_PATH`; failing that it asks your own binary, with
+`herdr status server --json`, which reports the endpoint Herdr would use — including a
+named session's, and the named pipe it uses on Windows rather than a socket file. Only if
+`herdr` is not on your PATH does it fall back to `~/.config/herdr/herdr.sock`. So it can be
+started from any terminal, not only from inside a Herdr pane.
 
 It needs **Herdr protocol 17 or newer**. Below that it refuses to start rather than misread
-fields it depends on, and the banner says so — `brew upgrade herdr`. Above it there is no
+fields it depends on, and the banner says so — `herdr update`. Above it there is no
 ceiling: a newer Herdr simply runs. One was tried and removed, because it fired on version
 drift rather than on anything broken. `herdr api schema --json` is the authority on what
 your binary actually speaks.

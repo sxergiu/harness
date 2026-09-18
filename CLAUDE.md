@@ -766,13 +766,43 @@ things here and most are wrong about this codebase — including an EXPRESS rule
 findings must be suppressed on day one is one nobody reads by the time it matters. CI runs
 lint → typecheck → test → build, the same four in the same order as above.
 
-**`os` is `darwin` alone, and npm enforces that on the ROOT package.** Linux was never run,
-so it was a claim rather than a fact and it is retracted; `notify.ts` keeps its `notify-send`
-branch, reachable from a git checkout and marked unsupported where it sits. The enforcement
-is the part worth knowing: `npm ci` refuses a platform the root `os` excludes — measured by
-setting it to `win32` on a mac and watching `npm ci --dry-run` answer `EBADPLATFORM` — so the
-field and the CI runner are ONE decision. Dropping Linux moved CI to `macos-latest`, and a
-future `os` edit that forgets the runner breaks every build at the first step.
+**THE `os` FIELD IS GONE, and anybody may now install this.** It read `darwin` alone, and
+npm enforces that on the ROOT package rather than only on dependencies — measured by setting
+it to `win32` on a mac and watching `npm ci --dry-run` answer `EBADPLATFORM`. So the field and
+the CI runner were one decision, and they still are: CI is a matrix over `macos-latest`,
+`ubuntu-latest` and `windows-latest`, `fail-fast: false`, and that matrix is the only evidence
+the claim rests on. Read it for exactly what it says. Every gate is deliberately machine-free,
+so a green Windows run means the code builds and the invariants hold there — never that the
+cockpit has talked to a live Herdr off macOS, which nothing has.
+
+Four things the platform lock had been hiding, all of which broke before the matrix went
+green, and each of which fails in a different way:
+
+- **npm runs scripts through `cmd.exe` on Windows**, where `mkdir -p`, `cp` and an
+  unexpanded `*` are not commands. `build:server`'s asset copy is now `build:assets`, one
+  `node -e` over `fs.cpSync`, and `npm test` names `invariants.test.ts` outright — the glob
+  worked only because a POSIX shell expanded it before node saw it, and node's own glob
+  support arrived after the version `engines` declares. A second test file must be added to
+  that script by hand; that is the cost of the floor staying at 20.
+- **Windows Herdr listens on a NAMED PIPE**, so `~/.config/herdr/herdr.sock` is not merely
+  in the wrong place there but the wrong kind of thing. `socketPath()` asks the binary —
+  `herdr status server --json` reports the endpoint it would use whether or not a server is
+  running (measured: a bogus `HERDR_SOCKET_PATH` came back under `status: not_running`), and
+  it resolves `--session`/`HERDR_SESSION`, which this client never knew about. Env var first,
+  binary second, the unix default last so a machine with Herdr off PATH is unchanged.
+- **`slugForCwd` now eats `\` and `:` as well**, since a `C:\Users\…` cwd resolved no
+  transcript at all. That shape is INFERRED from the POSIX slugs on disk, not measured, and
+  a wrong guess is silent by construction: the directory just does not exist, which is a
+  normal state (invariant 9), so every feed and changelist would read empty with no error.
+  Pinned in the test suite for that reason. It deliberately stops short of replacing every
+  non-alphanumeric — underscores and spaces are a claim about macOS paths nobody has checked,
+  and getting it wrong moves every slug that already works.
+- **Windows gets no native alert.** `notify.ts` has no branch and should not grow a
+  speculative one: the modern toast API wants a registered AppId and the usual PowerShell
+  recipe wants a module Windows does not ship, so anything written there would look like
+  support and fail quietly. The Herdr toast is unconditional and is what a Windows user gets.
+  `harness init`'s Herdr rule degrades the same honest way — the manifest it merges lives
+  under `~/.local/state/herdr`, so Windows reports `no-remote` and everything else installs.
 
 Remaining before it is something a stranger can rely on: the settings screen has never been
 rendered in a browser.

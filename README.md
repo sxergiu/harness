@@ -71,7 +71,7 @@ row remains and the content is gone.
 Herdr must be installed and running — this observes it and does nothing on its own.
 
 ```sh
-brew install herdr && brew services start herdr
+brew install herdr && brew services start herdr   # or see herdr.dev for Linux and Windows
 
 npm install -g @sxergiu/harness
 harness init   # installs the planner subagent and the two commands
@@ -108,8 +108,27 @@ read back off whichever of the two commands a session was given.
 They are ordinary Claude Code files, so a hand-started agent gets them too. `init` writes
 only what is missing and never overwrites one you have changed; `--force` replaces them.
 
-One process on `http://127.0.0.1:4373`, which it opens for you. macOS only — not because
-anything here is known to need it, but because nowhere else has ever been run.
+One process on `http://127.0.0.1:4373`, which it opens for you.
+
+### Platforms
+
+**macOS, Linux and Windows — installable on all three, used daily on one.** The package
+carried a `darwin` lock that made `npm install` refuse anywhere else; it is gone, and CI
+now runs the same four gates on all three runners. Be clear about what that proves: those
+gates are deliberately machine-free, so a green Windows run says the code builds and the
+invariants hold, not that this cockpit has ever talked to a live Herdr there. Herdr itself
+ships for all three.
+
+Three things are known to differ, none of which stops it running:
+
+- **Desktop alerts are macOS and Linux only** — `osascript` and `notify-send`. Windows gets
+  the Herdr toast in the terminal and no native alert, because raising one from a plain
+  process needs a module Windows does not ship.
+- **`harness init`'s Herdr detection rule needs Herdr's manifest**, which it looks for under
+  `~/.local/state/herdr`. On Windows it reports that it found none; everything else installs.
+- **The Linux and Windows paths have never been run.** Where something is inferred rather
+  than measured — the Windows form of a transcript directory name, most of all — the code
+  says so at the line it matters.
 
 See [USAGE.md](USAGE.md). The design and the reasoning behind each decision are in
 [SPEC.md](SPEC.md); [CLAUDE.md](CLAUDE.md) is the orientation for an agent working on this

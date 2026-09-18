@@ -8,10 +8,11 @@ import Fastify from 'fastify';
 import { WebSocketServer, type WebSocket } from 'ws';
 import {
   AGENT_SHADES, BIND_HOST, DEFAULT_PORT, DEV_PAGE_PORT, WS_PATH,
-  type AgentDiff, type AgentShade, type AsideView, type BlockedView, type FeedEntry,
-  type FeedPage, type FileContent, type HerdrRuleState, type ServerEvent, type SettingsView,
-  type SubagentsView, type UsageView,
+  type AccountView, type AgentDiff, type AgentShade, type AsideView, type BlockedView,
+  type FeedEntry, type FeedPage, type FileContent, type HerdrRuleState, type ServerEvent,
+  type SettingsView, type SubagentsView, type UsageView,
 } from '@harness/shared';
+import { Account } from './account.js';
 import { Aside } from './aside.js';
 import { Board } from './board.js';
 import { claudeFiles, installClaudeFiles } from './claudeFiles.js';
@@ -259,6 +260,13 @@ const board = new Board(
  * give up a turn to answer a question that was never about it.
  */
 const usage = new Usage(herdr);
+
+/**
+ * Which account those limits belong to, and the way to a different one when it
+ * runs out. It drives the `claude` CLI's own auth commands and handles no
+ * credentials of its own.
+ */
+const account = new Account(herdr);
 
 /** Subagent transcripts are read on demand only — they run to hundreds of KB. */
 const subagentTranscripts = new Transcripts();
@@ -511,6 +519,87 @@ app.post('/api/quit', async () => {
 app.post('/api/usage', async (_req, reply) => {
   try {
     const view: UsageView = await usage.read();
+    return view;
+  } catch (err) {
+    return reply.code(503).send({ error: (err as Error).message });
+  }
+});
+
+/**
+ * Who those limits are being spent by, and switching to somebody else.
+ *
+ * Settings' discipline rather than the board's: one read, and every write
+ * answers with the whole view back, so the panel can never hold an opinion that
+ * disagrees with `claude auth status`. It is deliberately NOT on the heartbeat —
+ * that rebuilds wholesale every 3s (invariant 6), and a `claude` process every
+ * 3s is a cost the board must never take on for a line of text at its foot.
+ *
+ * `GET` is also what finishes a pending login: `view()` settles one, so the
+ * browser polling this while a login is open is the whole of the waiting.
+ */
+app.get('/api/account', async (_req, reply) => {
+  try {
+    const view: AccountView = await account.view();
+    return view;
+  } catch (err) {
+    return reply.code(503).send({ error: (err as Error).message });
+  }
+});
+
+/**
+ * A switch can fail with the human LOGGED OUT — the logout lands and the pane
+ * does not — so unlike the other actions this one's message is the whole of what
+ * they have to go on, and it is logged as well as returned.
+ */
+app.post<{ Body: { email?: string } }>('/api/account/switch', async (req, reply) => {
+  try {
+    const view: AccountView = await account.switchTo(req.body?.email ?? null);
+    return view;
+  } catch (err) {
+    logError('account switch failed', err);
+    return reply.code(503).send({ error: (err as Error).message });
+  }
+});
+
+app.post('/api/account/logout', async (_req, reply) => {
+  try {
+    const view: AccountView = await account.logout();
+    return view;
+  } catch (err) {
+    logError('account logout failed', err);
+    return reply.code(503).send({ error: (err as Error).message });
+  }
+});
+
+/**
+ * What the human calls a profile. Ours alone — Claude Code never sees it — and
+ * keyed on the account rather than the address, since two accounts share one.
+ * A blank label clears it back to the address, the same reset the rules box has.
+ */
+app.post<{ Body: { email?: string; orgId?: string | null; label?: string } }>(
+  '/api/account/label',
+  async (req, reply) => {
+    const { email, orgId = null, label } = req.body ?? {};
+    if (typeof email !== 'string' || typeof label !== 'string'
+      || (orgId !== null && typeof orgId !== 'string')) {
+      return reply.code(400).send({ error: 'email and label are required, orgId may be null' });
+    }
+    try {
+      // Null is a key that no longer names an account — the same answer its
+      // neighbours give for a space or an agent that is not there. Answering
+      // the whole view would hand back the old name with nothing saying why.
+      const view: AccountView | null = await account.label({ email, orgId }, label);
+      return view ?? reply.code(404).send({ error: 'no such account' });
+    } catch (err) {
+      return reply.code(503).send({ error: (err as Error).message });
+    }
+  },
+);
+
+/** Gives up on a login nobody is going to finish, and closes its pane. */
+app.post('/api/account/abandon', async (_req, reply) => {
+  try {
+    const view: AccountView = await account.abandon();
     return view;
   } catch (err) {
     return reply.code(503).send({ error: (err as Error).message });
@@ -974,6 +1063,9 @@ let shuttingDown = false;
  * no work, nothing a human would go back to — so it closes with the cockpit
  * rather than outliving it. Asides deliberately do not: each holds an exchange
  * the human opened, and one is found again by name when the harness comes back.
+ * A pending login pane is aside-shaped for the same reason and is likewise left
+ * alone: it may be half-finished in the browser, and closing it would leave
+ * somebody logged out of everything with the way back gone.
  */
 function shutdown(): void {
   if (shuttingDown) return;

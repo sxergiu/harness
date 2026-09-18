@@ -14,12 +14,27 @@ on:
 
 jobs:
   check:
-    # macOS because `npm ci` REFUSES to run anywhere else: npm enforces the root
-    # package's `os` field, not just a dependency's, so `os: ["darwin"]` fails an
-    # ubuntu runner at EBADPLATFORM before the first gate. Measured, by setting
-    # the field to win32 on a mac and watching `npm ci --dry-run` refuse.
-    # It is also simply where this runs — the four gates now meet the product.
-    runs-on: macos-latest
+    # All three, because the package no longer carries an `os` field and anybody
+    # may now install it. This matrix is the ONLY evidence behind that: nothing
+    # here is developed off macOS, so the gates on the other two runners are
+    # what stands between "installable" and "installs and then fails".
+    #
+    # It also guards the specific thing that broke first. Windows runs npm
+    # scripts through cmd.exe, where `mkdir -p`, `cp` and an unexpanded `*` do
+    # not exist — the asset copy and the test glob were both POSIX shell and the
+    # build would have died on contact.
+    #
+    # What it does NOT cover is Herdr itself. Every gate here is deliberately
+    # machine-free (see the note above), so a green Windows run says the code
+    # builds and the invariants hold there, not that the cockpit has ever talked
+    # to a named pipe.
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # Every platform's result is wanted, especially when one fails: a run that
+      # stopped at the first red tells you nothing about the other two.
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest, windows-latest]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

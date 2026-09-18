@@ -604,9 +604,9 @@ export class Herdr {
   }
 
   /**
-   * A fresh tab with an agent running in it, or nothing at all — the only way
-   * anything here creates a tab, so that guarantee cannot be forgotten at a
-   * fourth call site.
+   * A fresh tab with an agent running in it, or nothing at all. One of the two
+   * places a tab is created, and both are here: see `launchCommand` for what
+   * they each guarantee and why they cannot be one function.
    *
    * The sequence is four steps and every one of them is load-bearing (invariants
    * 12 and 13): the tab, the shell reaching its prompt before `agent.start`
@@ -640,6 +640,50 @@ export class Herdr {
         const why = await this.lastOutput(paneId);
         throw new Error(`${name} exited as soon as it started${why ? `: ${why}` : ''}`);
       }
+    } catch (err) {
+      await this.closePane(paneId).catch(() => {});
+      throw err;
+    }
+    return paneId;
+  }
+
+  /**
+   * A fresh tab with a shell command typed into it, for the one thing the
+   * cockpit needs that is not an agent: `claude auth login`, which opens a
+   * browser and has to be visible while the human finishes it.
+   *
+   * There is no Herdr method that runs a command in a pane. Measured against
+   * protocol 22: `tab.create` takes `cwd`, `env`, `focus`, `label` and
+   * `workspace_id` and no argv, and there is no `pane.run` or `pane.exec`
+   * anywhere in the schema — so typing at a shell is the only path, which makes
+   * `waitForPrompt` (invariant 12) as load-bearing here as in `launchAgent`.
+   * It must be `pane.send_input`: `pane.send_text` exists and takes NO keys, so
+   * reaching for it types the command and never submits it, and a login sitting
+   * unsubmitted looks exactly like a human being slow — invariant 14's failure
+   * at a different call site.
+   *
+   * This and `launchAgent` own DIFFERENT failures, which is why one function
+   * with a flag would be worse than two. `launchAgent` owns "the agent never
+   * started", which only `agent.get` can answer. This owns "the command was
+   * never typed" — `tab.create` succeeded and `pane.send_input` did not — and
+   * closes the pane, so neither can leave behind the bare shell of invariant 19.
+   * It deliberately does NOT own "the command failed", for invariant 12's
+   * reason: it has only typed at a shell and cannot know what that did. For its
+   * one caller that is right twice over, because a pane where the login went
+   * wrong is precisely what the human is being shown.
+   */
+  async launchCommand(
+    where: { workspaceId: string; cwd: string; label: string },
+    command: string,
+  ): Promise<string> {
+    const r = await this.request<{ root_pane: { pane_id: string } }>('tab.create', {
+      workspace_id: where.workspaceId, cwd: where.cwd, focus: true, label: where.label,
+    });
+    const paneId = r.root_pane.pane_id;
+
+    try {
+      await this.waitForPrompt(paneId);
+      await this.sendText(paneId, command);
     } catch (err) {
       await this.closePane(paneId).catch(() => {});
       throw err;

@@ -389,6 +389,89 @@ export interface UsageView {
 }
 
 /**
+ * Who Claude Code is signed in as, as `claude auth status --json` reports it.
+ *
+ * **THE ACCOUNT IS `email` AND `orgId` TOGETHER, never the email alone.** One
+ * address can hold two accounts with two subscriptions — a personal Pro and a
+ * seat in an organization are the ordinary case — and keying the known list on
+ * the email made the second one overwrite the first, so the list stayed at one
+ * row and a second account could not be added at all. `orgId` is the only field
+ * that tells them apart; `orgName` is what tells them apart on SCREEN, so a row
+ * renders it beside the address rather than hiding it in a tooltip.
+ *
+ * `email` is still all that `claude auth login --email <x>` can be given, which
+ * means a switch between two accounts on one address pre-fills the page and
+ * leaves the choice of organization to the browser. There is no CLI flag for it.
+ */
+export interface AccountIdentity {
+  email: string;
+  /** The disambiguator. Null only from a `claude` that stopped reporting it. */
+  orgId: string | null;
+  orgName: string | null;
+  /** "pro", "max". */
+  subscriptionType: string | null;
+}
+
+/**
+ * Same address AND same organization. Anything less merges two accounts into
+ * one. Takes only the two fields it compares, so the pair can be addressed on
+ * its own — which is what a rename is sent as.
+ */
+export type AccountKey = Pick<AccountIdentity, 'email' | 'orgId'>;
+export const sameAccount = (a: AccountKey, b: AccountKey): boolean =>
+  a.email === b.email && a.orgId === b.orgId;
+
+/**
+ * An account the cockpit has seen, under whatever the human calls it.
+ *
+ * `label` is the ONE field here that Claude Code knows nothing about — every
+ * other one is read back off `claude auth status`, and this one is typed into
+ * the panel. Null means nobody has renamed it and the address stands in, so an
+ * account is identified by what it was signed in with until it is worth calling
+ * something else. Clearing the box restores that rather than storing a blank.
+ *
+ * It exists because the address is not always enough to tell two rows apart:
+ * two accounts at one address are the ordinary case, `orgName` is null on at
+ * least one real account, and two plans can repeat. `label` is the only
+ * disambiguator that is guaranteed to work, because a human chose it.
+ */
+export interface KnownAccount extends AccountIdentity {
+  label: string | null;
+}
+
+/**
+ * The account surface at the foot of the board: who is live, who else the
+ * cockpit has seen, and whether a login is half-finished in a pane.
+ *
+ * `available: false` is NOT the same as `current: null`, and conflating them
+ * reports "logged out" about a machine that is signed in: the first means
+ * `claude auth status` never answered — not on PATH, or a version whose output
+ * this cannot read — and the second means it answered that nobody is.
+ *
+ * `known` is ordered most recently signed-in first, by construction. The order
+ * IS the recency and no timestamp rides along, the same reasoning that keeps a
+ * locked row's slot off the wire: a second opinion about order is something for
+ * the browser to disagree with.
+ */
+export interface AccountView {
+  available: boolean;
+  /**
+   * Carries the stored `label` as well, resolved by the server against the
+   * known list — so the line at the foot of the board names the live profile
+   * without the browser holding a second opinion about which row it is.
+   */
+  current: KnownAccount | null;
+  known: KnownAccount[];
+  /**
+   * A `claude auth login` typed into a visible pane and not yet finished. While
+   * this is set the human is signed OUT, which is why the panel says so rather
+   * than showing an empty account line. `email` is whatever the login page was
+   * asked to pre-fill, and null for a plain login.
+   */
+  pending: { email: string | null; stalled: boolean } | null;
+}
+
+/**
  * Everything about this INSTALL, as against the session: what the agents are
  * told, which checkouts they may push from, and whether the files they depend
  * on are actually on the machine.

@@ -9,7 +9,7 @@ import { shouldOpen, type Running } from './instance.js';
 import { admits, isLocal } from './origin.js';
 import { parse } from './projects.js';
 import { rulesFor } from './rules.js';
-import { goalOf, type Entry } from './transcript.js';
+import { goalOf, slugForCwd, type Entry } from './transcript.js';
 import { cropPanel, limitsOf } from './usage.js';
 
 /**
@@ -149,6 +149,27 @@ test('malformed goal attachments return null rather than throwing', () => {
     assert.doesNotThrow(() => goalOf([e]));
     assert.equal(goalOf([e]), null);
   }
+});
+
+// -- the transcript slug ---------------------------------------------------
+// A wrong slug is not an error anywhere: the directory simply does not exist,
+// and a missing transcript is a normal state (invariant 9). So the whole
+// symptom is an agent whose feed and changelist are permanently empty, which
+// is the reason this is pinned rather than left to the one place it is read.
+
+test('a POSIX cwd slugs as Claude Code writes it on disk', () => {
+  assert.equal(slugForCwd('/Users/x/repos/web.app'), '-Users-x-repos-web-app');
+  assert.equal(slugForCwd('/Users/x/.harness'), '-Users-x--harness');
+});
+
+test('a Windows cwd loses its drive colon and backslashes', () => {
+  assert.equal(slugForCwd('C:\\Users\\x\\repos\\foo'), 'C--Users-x-repos-foo');
+});
+
+test('characters Claude Code can keep are kept — underscores and spaces', () => {
+  // Widening this to every non-alphanumeric is a claim about macOS paths that
+  // nobody has measured, and it would silently move every existing slug.
+  assert.equal(slugForCwd('/Users/x/my_repo v2'), '-Users-x-my_repo v2');
 });
 
 // -- the usage panel -------------------------------------------------------

@@ -75,9 +75,22 @@ export interface Assignment {
   at: number;
 }
 
-/** `/Users/x/repos/web.app` → `-Users-x-repos-web-app`. Dots become dashes too. */
+/**
+ * `/Users/x/repos/web.app` → `-Users-x-repos-web-app`. Dots become dashes too.
+ *
+ * The drive letter and the backslash are here for Windows, where `C:\Users\x`
+ * becomes `C--Users-x` — INFERRED from the rule the POSIX shapes on disk imply
+ * (a separator and a dot both map to a dash, so the colon and the backslash are
+ * the same class of thing) rather than measured, because nothing here has run on
+ * Windows. It is worth stating what a wrong guess costs: the path simply does not
+ * exist, every feed and every changelist is empty, and nothing reports an error —
+ * a missing transcript is a normal state (invariant 9). Only characters Claude
+ * Code cannot leave intact are touched: widening this to every non-alphanumeric
+ * would take underscores and spaces with it, which is a claim about macOS paths
+ * that nobody has checked.
+ */
 export function slugForCwd(cwd: string): string {
-  return cwd.replace(/[/.]/g, '-');
+  return cwd.replace(/[/.\\:]/g, '-');
 }
 
 export function transcriptPathFor(cwd: string, sessionUuid: string): string | null {

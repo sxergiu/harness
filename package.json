@@ -1,6 +1,6 @@
 {
   "name": "@sxergiu/harness",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "A local browser cockpit for the coding agents running in Herdr",
   "keywords": [
     "herdr",
@@ -29,6 +29,7 @@
   },
   "files": [
     "dist",
+    "CHANGELOG.md",
     "LICENSE",
     "README.md",
     "USAGE.md"

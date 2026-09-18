@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { resolve } from 'node:path';
 import { test } from 'node:test';
+import { sameAccount } from '@harness/shared';
+import { statusOf } from './account.js';
 import { decide } from './claudeFiles.js';
 import { buildAgentDiff } from './diff.js';
 import { promptBoxHolds, staleServerWarning } from './herdr.js';
@@ -335,4 +337,49 @@ test('the remote version rides along verbatim, which is what staleness is measur
 
 test('a manifest we did not write is not mistaken for ours', () => {
   assert.equal(isOurs('version = "2026.09.11.1"\n[[rules]]\n'), false);
+});
+
+// -- the account switch ----------------------------------------------------
+// A switch is decided entirely on this parse. A loose one reports a login that
+// never happened: the pane the human is still using gets closed, the panel
+// shows the new account, and every request keeps going out on the old one.
+
+test('the real payload parses, and the email survives it', () => {
+  // Measured from `claude auth status --json` on a signed-in machine.
+  const out = statusOf(JSON.stringify({
+    loggedIn: true, authMethod: 'claude.ai', apiProvider: 'firstParty',
+    email: 'someone@example.com', orgId: 'o-1', orgName: "someone's Organization",
+    subscriptionType: 'pro',
+  }));
+  assert.equal(out?.current?.email, 'someone@example.com');
+  assert.equal(out?.current?.subscriptionType, 'pro');
+  assert.equal(out?.current?.orgId, 'o-1', 'the disambiguator must survive the parse');
+});
+
+test('TWO ACCOUNTS ON ONE ADDRESS are two accounts', () => {
+  // A personal Pro and an organization seat under the same address. Keying the
+  // known list on the email alone made the second REPLACE the first, so the
+  // list stayed at one row and a second account could not be added at all.
+  const pro = { email: 'a@b.com', orgId: 'org-personal', orgName: 'a', subscriptionType: 'pro' };
+  const seat = { email: 'a@b.com', orgId: 'org-acme', orgName: 'Acme', subscriptionType: 'max' };
+  assert.equal(sameAccount(pro, seat), false);
+  assert.equal(sameAccount(pro, { ...pro }), true);
+});
+
+test('SIGNED OUT is an answer, not a failure', () => {
+  // The distinction the whole panel rests on: this is `available: true` with
+  // nobody signed in, where a null below is a `claude` that did not answer.
+  assert.deepEqual(statusOf('{"loggedIn":false}'), { current: null });
+});
+
+test('a signed-in answer with no email is not signed in', () => {
+  assert.equal(statusOf('{"loggedIn":true}'), null);
+  assert.equal(statusOf('{"loggedIn":true,"email":""}'), null);
+});
+
+test('anything that is not the shape we know answers null', () => {
+  assert.equal(statusOf(''), null, 'not on PATH');
+  assert.equal(statusOf('Error: not logged in'), null, 'an error printed to stdout');
+  assert.equal(statusOf('{"loggedIn":"yes"}'), null, 'truthy is not a boolean');
+  assert.equal(statusOf('null'), null);
 });

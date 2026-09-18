@@ -31,10 +31,9 @@ export function notify(herdr: Herdr, n: Notification): void {
       n.urgent ? '/System/Library/Sounds/Sosumi.aiff' : '/System/Library/Sounds/Glass.aiff',
     ]);
   } else if (process.platform === 'linux') {
-    // Kept, but unsupported: `os` in package.json is darwin-only, so npm refuses
-    // to install here and this is reachable only from a git checkout. It has
-    // never been run, which is exactly why the platform claim was dropped —
-    // everything else in this file was watched working.
+    // Never run — `os` in package.json kept npm from installing here at all
+    // until recently, and this branch is the part of the platform work that no
+    // measurement stands behind. Everything above it was watched working.
     //
     // argv, not a script: `escapeAppleScript` exists for AppleScript string
     // literals and would put visible backslashes in the notification.
@@ -50,6 +49,14 @@ export function notify(herdr: Herdr, n: Notification): void {
     const sound = n.urgent ? 'dialog-warning' : 'complete';
     detached('canberra-gtk-play', ['-i', sound]);
   }
+
+  // Windows deliberately has no branch. There is no dependency-free way to raise
+  // a desktop toast from a plain process: the modern API wants a registered
+  // AppId, and the usual PowerShell recipe needs a module that is not installed
+  // by default — so anything written here would be code that looks like support
+  // and mostly fails silently. The Herdr toast above is unconditional and is
+  // what a Windows user gets; the README says so rather than leaving them to
+  // discover it.
 }
 
 function escapeAppleScript(s: string): string {

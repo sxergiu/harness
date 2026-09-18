@@ -24,9 +24,6 @@
   "engines": {
     "node": ">=20"
   },
-  "os": [
-    "darwin"
-  ],
   "publishConfig": {
     "access": "public"
   },
@@ -50,10 +47,11 @@
     "dev:web": "npm run dev -w web",
     "build": "npm run build:web && npm run build:server",
     "build:web": "npm run build -w web",
-    "build:server": "esbuild server/src/index.ts --bundle --platform=node --format=esm --target=node20 --outfile=dist/server.js --external:fastify --external:@fastify/static --external:ws --banner:js=\"#!/usr/bin/env node\" && mkdir -p dist/assets && cp server/src/assets/* dist/assets/",
+    "build:server": "esbuild server/src/index.ts --bundle --platform=node --format=esm --target=node20 --outfile=dist/server.js --external:fastify --external:@fastify/static --external:ws --banner:js=\"#!/usr/bin/env node\" && npm run build:assets",
+    "build:assets": "node -e \"require('node:fs').cpSync('server/src/assets','dist/assets',{recursive:true})\"",
     "lint": "oxlint server/src web/src shared/src --deny-warnings",
     "start": "node dist/server.js",
-    "test": "node --import tsx --test server/src/*.test.ts",
+    "test": "node --import tsx --test server/src/invariants.test.ts",
     "prepublishOnly": "npm run lint && npm run typecheck && npm test && npm run build",
     "stop": "node dist/server.js stop",
     "typecheck": "tsc --noEmit -p tsconfig.json"

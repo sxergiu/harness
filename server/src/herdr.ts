@@ -127,14 +127,69 @@ export function promptBoxHolds(pane: string): boolean {
   return box !== undefined && box.replace(/^\s*❯/, '').trim().length > 0;
 }
 
+/** What the `herdr` binary printed, or null if it is not on PATH or did not answer. */
+function cli(args: string[]): string | null {
+  try {
+    return execFileSync('herdr', args, {
+      encoding: 'utf8', timeout: 3_000, stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+  } catch {
+    return null;
+  }
+}
+
+/** Resolved once and kept: none of the three sources changes under a running process. */
+let cachedSocketPath: string | undefined;
+
 /**
- * Herdr injects HERDR_SOCKET_PATH into panes it manages, but the cockpit is
- * usually started from an ordinary terminal, where it is absent. Fall back to
- * the documented default rather than refusing to run.
+ * Where Herdr is listening, in its own documented resolution order — and the
+ * reason this is a lookup rather than a constant is Windows, where the endpoint
+ * is a NAMED PIPE. A path assembled from `homedir()` is not merely in the wrong
+ * place there; it is the wrong kind of thing, and `createConnection` would go on
+ * failing against a name no Herdr will ever answer to.
+ *
+ * So ask the binary. `herdr status server --json` reports the socket it WOULD
+ * use whether or not a server is running — measured, a bogus HERDR_SOCKET_PATH
+ * came back as `{"status":"not_running", ...,"socket":"/tmp/nope.sock"}` — and it
+ * resolves `--session`/`HERDR_SESSION` as well, which this client never knew
+ * about and would previously have missed by connecting to the default session's
+ * socket instead.
+ *
+ * The env var is still read first, because Herdr injects it into the panes it
+ * manages and it is the override the docs name; the unix default remains the
+ * last resort, so a machine with Herdr running but not on PATH behaves exactly
+ * as it did before.
  */
 function socketPath(): string {
-  return process.env.HERDR_SOCKET_PATH ?? join(homedir(), '.config', 'herdr', 'herdr.sock');
+  if (cachedSocketPath === undefined) {
+    cachedSocketPath = process.env.HERDR_SOCKET_PATH
+      ?? reportedSocket()
+      ?? join(homedir(), '.config', 'herdr', 'herdr.sock');
+  }
+  return cachedSocketPath;
 }
+
+function reportedSocket(): string | undefined {
+  const out = cli(['status', 'server', '--json']);
+  if (out === null) return undefined;
+  try {
+    const { socket } = JSON.parse(out) as { socket?: unknown };
+    return typeof socket === 'string' && socket.length > 0 ? socket : undefined;
+  } catch {
+    return undefined; // an older CLI, or one that stopped answering in JSON
+  }
+}
+
+/**
+ * What to type when Herdr is missing, which is the one preflight note a person
+ * cannot act on if it names the wrong package manager. Upgrading needs no such
+ * split: `herdr update` is the binary's own path on every platform.
+ */
+const INSTALL_HINT = process.platform === 'win32'
+  ? 'irm https://herdr.dev/install.ps1 | iex'
+  : process.platform === 'darwin'
+    ? 'brew install herdr'
+    : 'curl -fsSL https://herdr.dev/install.sh | sh';
 
 /** `null` once we have looked and found nothing, so we look exactly once. */
 let cachedBinaryVersion: string | null | undefined;
@@ -145,15 +200,8 @@ let cachedBinaryVersion: string | null | undefined;
  */
 function binaryVersion(): string | undefined {
   if (cachedBinaryVersion === undefined) {
-    try {
-      // `herdr --version` prints "herdr 0.9.0".
-      const out = execFileSync('herdr', ['--version'], {
-        encoding: 'utf8', timeout: 3_000, stdio: ['ignore', 'pipe', 'ignore'],
-      });
-      cachedBinaryVersion = out.trim().split(/\s+/).pop() ?? null;
-    } catch {
-      cachedBinaryVersion = null; // not installed, or not on PATH
-    }
+    // `herdr --version` prints "herdr 0.9.0".
+    cachedBinaryVersion = cli(['--version'])?.split(/\s+/).pop() ?? null;
   }
   return cachedBinaryVersion ?? undefined;
 }
@@ -270,7 +318,7 @@ export class Herdr {
   async preflight(): Promise<string[]> {
     const notes: string[] = [];
     const binary = binaryVersion();
-    if (!binary) notes.push('Herdr is not on PATH. Install it with: brew install herdr');
+    if (!binary) notes.push(`Herdr is not on PATH. Install it with: ${INSTALL_HINT}`);
 
     try {
       const pong = await this.request<{ protocol: number; version?: string }>('ping');
@@ -281,7 +329,7 @@ export class Herdr {
       const stale = staleServerWarning(binary, pong.version);
       if (stale) notes.push(stale);
       if (pong.protocol < PROTOCOL_MIN) {
-        notes.push(`Herdr speaks protocol ${pong.protocol}; this needs at least ${PROTOCOL_MIN}. Upgrade with: brew upgrade herdr`);
+        notes.push(`Herdr speaks protocol ${pong.protocol}; this needs at least ${PROTOCOL_MIN}. Upgrade with: herdr update`);
       }
     } catch {
       notes.push(`No Herdr server is answering on ${socketPath()}. Start one with: herdr server`);

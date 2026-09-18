@@ -254,16 +254,31 @@ Every one was established by probing the live system, and most fail *silently* i
     while a real one was still pending past +2640ms. `waitForLaunch`'s old
     `!info?.launch_pending` read those two answers as one, which is exactly how a failed
     start returned a pane id: the aside then typed its question at a shell prompt.
-    So every tab is created inside `herdr.launchAgent`, the only thing here that calls
-    `tab.create`, and whatever it cannot start it closes — `pane.close` on a tab's only
-    pane removes the tab too, verified. Its four primitives are private for that reason: a
-    fourth call site cannot re-open the hole. **Uncertainty must answer LAUNCHED**, since
+    So every tab is created inside `herdr.launchAgent`, and whatever it cannot start it
+    closes — `pane.close` on a tab's only pane removes the tab too, verified. Its four
+    primitives are private for that reason: a fourth call site cannot re-open the hole.
+    **Uncertainty must answer LAUNCHED**, since
     the alternative closes the pane: a Herdr that stops answering, or a launch still
     pending after 20s, is slow or unreachable rather than dead, and tearing down a running
     agent is far worse than the leak this fixes. Closing the pane also takes the only
     account of what went wrong off the screen, so the last non-prompt line it printed
     travels out in the error instead — "No conversation found with session ID: …" reaches
     the browser rather than a bare 503.
+    **There are TWO tab creators now, and they own different failures.** `launchCommand`
+    is the second, for `claude auth login`, which is not an agent and has to stay on
+    screen while a human finishes it in a browser. Herdr cannot run a command in a pane at
+    all: measured against protocol 22, `tab.create` takes `cwd`, `env`, `focus`, `label`
+    and `workspace_id` and no argv, and there is no `pane.run` or `pane.exec` in the
+    schema — so typing at a shell is the only path and invariant 12's wait is as
+    load-bearing here as there. It must be `pane.send_input`; `pane.send_text` exists,
+    takes NO `keys`, and would type the command and never submit it, which is invariant
+    14's failure at a different call site. `launchAgent` owns "the agent never started",
+    which only `agent.get` can answer; `launchCommand` owns "the command was never typed"
+    and closes the pane on it, so neither leaves the unfindable bare shell above. It
+    deliberately does NOT own "the command failed" — it has only typed at a shell — and for
+    its one caller that is right twice over, a login that went wrong being exactly what the
+    human is being shown. Both live in `herdr.ts` and nothing outside it calls `tab.create`;
+    that was never mechanical (`request` is public) and is one review away from a third.
 
 ## What enforcement guarantees
 
@@ -331,6 +346,8 @@ server/src/
   instance.ts         the single-instance lock, and where to point the browser
   origin.ts           who may talk to an unauthenticated server. THE security boundary
   usage.ts            the account's limit bars, read through an agent of our own
+  account.ts          which Claude account is being spent, and switching to another.
+                      Drives the `claude auth` commands; handles no credentials
   invariants.test.ts  the invariants that fail silently, over fixtures only
 web/src/
   App.tsx             the one column: collapsible spaces, their agents, inline edits
@@ -403,6 +420,109 @@ is kept off the board.
   `/investigate`. So `filesWritten` counts what the fork itself wrote, over the fresh
   entries only, and the panel says `⚠ N files written`. Counting over the whole fork would
   report the parent's files as the aside's.
+
+## Accounts
+
+One human with two subscriptions spends one of them at a time, and the switch is at the
+foot of the board because that is where the bars that prompt it are.
+
+- **THE HARNESS HANDLES NO CREDENTIALS, and that is a decision rather than an oversight.**
+  It drives the CLI's own surface — `claude auth status --json`, `logout`, `login` — and
+  reads their stdout. It never reads or writes the keychain slot the tokens live in (macOS:
+  service `Claude Code-credentials`, acct `$USER`, holding `accessToken`/`refreshToken`) or
+  the `oauthAccount` block in `~/.claude.json`. A vault that parked and restored those
+  blobs would switch accounts with no browser at all, and the refresh tokens measured ~27
+  days out make it genuinely workable; it was offered and declined. Everything else here
+  follows from that, including the browser step nobody can skip. Note `trustFolder` already
+  writes `~/.claude.json`, so "never touches that file" would be false — it is the
+  `oauthAccount` block and the keychain that are untouched.
+- **`claude auth status --json` EXITS 1 WHEN SIGNED OUT, and prints its JSON anyway.**
+  Measured against an empty `CLAUDE_CONFIG_DIR`: `{"loggedIn":false,"authMethod":"none",…}`
+  on stdout, exit 1. So the rejected case has to be parsed too — `statusOf(err.stdout)` —
+  and reading only the resolved one made the panel report `claude not on PATH` about a
+  machine that was merely signed out. That is the exact conflation `available` exists to
+  prevent, it made `{loggedIn:false}` unreachable in production while a test pinned it, and
+  worst of all it made signing back IN from the cockpit impossible from precisely the state
+  the cockpit's own `log out` leaves behind. A rejection with no readable stdout still
+  answers null, which is what keeps a `claude` that is genuinely absent distinguishable.
+- **The login pane gets no board row, and the reason is that Herdr is TOLD about agents
+  rather than detecting them.** Every pane in a live `herdr pane list` that carries
+  `agent: "claude"` also carries `agent_session` with `"source":"herdr:claude"` — a Claude
+  Code session reporting itself (`pane.report_agent_session`) — while every bare shell pane
+  has no `agent` at all and `agent_status: "unknown"`. `auth login` is a subcommand and
+  starts no session, so `board.ts`'s `if (!p.agent) continue` drops the pane by
+  construction and no name-based exclusion is needed. An instrument that is an AGENT still
+  needs excluding by name (`isInstrument`); one that is a SHELL excludes itself.
+- **A switch is `logout` then `login`, and the hole between them is unavoidable.** The CLI
+  holds one account at a time, so there is nothing to log into until the current one is
+  gone; a Herdr that fails after the logout lands leaves the human signed out with nothing
+  on screen. The error says exactly that and names the command to type, which is the whole
+  of the mitigation.
+- **Completion is "signed in AND something changed", never "signed in".** It is NOT
+  established whether `claude auth status` reflects a logout immediately — probing it costs
+  a live session — and a status that lagged would report the login finished the instant it
+  began, closing the pane in the human's face and showing the new account while every
+  request still goes out on the old one. Either signal suffices: `status` was observed
+  signed OUT at some point, or the email is not the one we left. Both failing leaves the
+  only observable state the one we started in, and waiting is the honest answer to that.
+- **There is no timer on the server.** A pending login is settled by somebody READING the
+  view, and the browser polls while one is open — so `↻` and the poll are one code path,
+  and there is nothing to cancel on shutdown, on abandon or on a second switch. A stalled
+  login stops the poll and leaves `↻` and `×`; finishing it slowly in the pane and then
+  pressing `↻` is what completes it.
+- **Its pane is aside-shaped, not usage-shaped, so `shutdown` leaves it alone.** It may be
+  half-finished in a browser, and closing it takes the way back with it. `pending` is in
+  memory only and legitimately empty after a restart, like `stateSince` — which costs
+  exactly this: a harness restarted inside the few minutes a login is open forgets the
+  pane, leaving it on screen in Herdr for the human to finish or close while the next
+  switch opens a second one beside it. Adoption by name, the way `usage.ts` finds its agent
+  again, is not available here — that works on an AGENT name and this pane hosts a shell.
+  `pane.rename` sets a `label` that does not appear on a pane in `herdr pane list` at all.
+- **AN ACCOUNT IS `email` AND `orgId`, NEVER THE EMAIL ALONE.** One address holds two
+  accounts with two subscriptions whenever somebody has a personal Pro and a seat in an
+  organization — the live machine has exactly that — and keying the known list on the
+  address made the second capture REPLACE the first. The list stayed at one row, so a
+  second account could not be added at all and there was never anything to switch to.
+  `sameAccount` in `shared` is the one rule, used by the store's filter, its head guard,
+  `settle`'s second signal and the panel's `live` marker; `orgId` was briefly dropped from
+  the wire for being unread, which is how this got in. **`orgName` is rendered beside the
+  address rather than hidden in a tooltip**, because for two accounts at one address it is
+  the only visible difference between the rows. `--email` still cannot express the
+  distinction — there is no org flag on `claude auth login` — so a switch between two
+  accounts at one address pre-fills the page and leaves the choice to the browser, and
+  `settle`'s email comparison can never fire for it: `sawLoggedOut` is the only signal left.
+- **A profile can be RENAMED, and `capture` must carry the name across.** `label` is the
+  one field on a stored row that `claude auth status` knows nothing about, and a capture
+  runs on every read of the panel — every two seconds while a login is open — so building
+  the row from the identity alone erases a rename within a tick of making it, which looks
+  like the rename never took. The row renders `label ?? email`, so an un-renamed account is
+  still its address and a blank label is a RESET rather than a row with no visible identity:
+  `setLabel` maps blank to null on the way in and `parse` does the same on the way out,
+  through the same `field` helper the display fields use. `parse` normalises `orgId` there
+  too — it is compared with `===`, so a row carrying `undefined` where we write null is one
+  `find` can never return, which makes it unrenameable and duplicates it on the next
+  capture: the phantom row the version-2 bump was taken to avoid, by the other door.
+- **Accounts are CAPTURED, never typed.** One joins the list by being signed in, which is
+  why there is no field to type an address into and why a new account arrives through a
+  plain `login`. `accounts.json` takes `recent.json`'s tolerant policy rather than
+  `projects.json`'s discarding one: nothing is authorized by it, the live account always
+  comes from `claude auth status`, and the worst a misread does is pre-fill the wrong
+  address on a page the human is looking at.
+- **The email reaches a SHELL COMMAND LINE**, since `launchCommand` has no argv to hand it
+  to, so it is checked against the shape of an address and dropped rather than quoted if it
+  is anything else. Every address comes out of `claude auth status`, so this is not expected
+  to fire; it is the one place a string from another process reaches a shell.
+- **`available: false` is not `current: null`.** The first is a `claude` that did not
+  answer — not on PATH, or an output this cannot read — and the second is nobody signed in.
+  Conflating them reports "signed out" about a machine that is signed in.
+- **The account line lives INSIDE the dock's toggle row.** That dock's shut height is its
+  own metric so its top border and the prompt box's meet as one rule across the window; a
+  line above it is the one thing that breaks the alignment, and the dock starts shut, so a
+  line inside the collapsible half would not be there on load.
+- **Nothing here touches an agent**, and the panel says so without claiming to know what a
+  switch does to one mid-request: "Running agents are not touched, and may fail their next
+  request." The limit bars still read the live account only — there is no per-account usage
+  cache — and nothing ever switches on its own, however exhausted a limit is.
 
 ## Conventions
 

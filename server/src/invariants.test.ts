@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { resolve } from 'node:path';
 import { test } from 'node:test';
 import { decide } from './claudeFiles.js';
 import { buildAgentDiff } from './diff.js';
@@ -220,6 +221,17 @@ test('a delegated checkout gets the amendment, scoped to this checkout', () => {
   assert.ok(rules.includes('extends to any other checkout.'));
 });
 
+/**
+ * A store keyed the way `projects.ts` writes one, which is `resolve()`d — the one
+ * form its own guard admits. The key has to be built rather than written out,
+ * because `/a` is absolute on POSIX and is NOT on Windows, where `resolve`
+ * answers `\a`: the literal was dropped for being relative before its value was
+ * ever looked at, which failed the grant below and passed the `"yes"` refusal
+ * above for entirely the wrong reason.
+ */
+const stored = (gitDelegated: unknown): string =>
+  JSON.stringify({ version: 1, checkouts: { [resolve('/a')]: { gitDelegated } } });
+
 test('a store it cannot make sense of yields NO grants, and never throws', () => {
   // The silent half. A bad read that answers `true` looks identical on the
   // board to a real grant, and the first sign of it is a commit in a repository
@@ -229,12 +241,12 @@ test('a store it cannot make sense of yields NO grants, and never throws', () =>
   assert.equal(parse('{"version":1,"checkouts":null}').size, 0);
   assert.equal(parse('[{"path":"/a"}]').size, 0);
   // Truthy but not `true`, and a relative key a resolved lookup can never match.
-  assert.equal(parse('{"version":1,"checkouts":{"/a":{"gitDelegated":"yes"}}}').size, 0);
+  assert.equal(parse(stored('yes')).size, 0);
   assert.equal(parse('{"version":1,"checkouts":{"repos/a":{"gitDelegated":true}}}').size, 0);
 });
 
 test('a store it CAN read still grants — the refusals above are not just a broken parse', () => {
-  assert.equal(parse('{"version":1,"checkouts":{"/a":{"gitDelegated":true}}}').size, 1);
+  assert.equal(parse(stored(true)).size, 1);
 });
 
 // -- invariant 15: a second invocation must not pile up tabs ---------------

@@ -193,6 +193,13 @@ export type FeedEntry =
        * re-run. `summary` above is clipped to 80 characters and cannot serve.
        */
       sql: string | null;
+      /**
+       * The file this call's `summary` IS, relative to the cwd — carried
+       * separately because `summary` is a string and loses the fact that it
+       * names a file. Null unless the primary argument was a path inside the
+       * cwd, so the browser is never offered a link the file route would refuse.
+       */
+      path: string | null;
     }
   | {
       kind: 'agent';
@@ -343,10 +350,16 @@ export interface AgentDiff {
  * One file as it sits on disk NOW — deliberately not the changelist above it.
  * The hunks are this agent's own work; the file may also hold another agent's
  * later edits, or have been overwritten entirely. Copying is the one place a
- * reviewer wants disk state rather than provenance.
+ * reviewer wants disk state rather than provenance, and so is reading a file the
+ * agent merely referenced, which is the other thing this answers.
  */
 export interface FileContent {
+  /** Absolute, as RESOLVED — not the string the caller asked for. */
   path: string;
+  /** Relative to the agent's cwd, for a heading narrow enough to read. */
+  relPath: string;
+  /** Highlight.js language id, from the same table `DiffFile.language` uses. */
+  language: string | null;
   content: string;
 }
 

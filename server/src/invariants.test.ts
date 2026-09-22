@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import { sameAccount } from '@harness/shared';
 import { statusOf } from './account.js';
 import { decide } from './claudeFiles.js';
-import { buildAgentDiff } from './diff.js';
+import { buildAgentDiff, within } from './diff.js';
 import { announces, backoffMs, paneTookText, promptBoxHolds, staleServerWarning } from './herdr.js';
 import { parse as parseRecent } from './history.js';
 import { isOurs, merge, versionOf } from './herdrRules.js';
@@ -189,6 +189,29 @@ test('a string or array toolUseResult is not a write', () => {
     { type: 'assistant', toolUseResult: ['a', 'b'] },
   ] as unknown as Entry[];
   assert.equal(buildAgentDiff(notWrites, '/repo').files.length, 0);
+});
+
+// -- the file route's containment check -------------------------------------
+// `readAgentFile` serves any path resolving inside an agent's cwd to a browser
+// with no auth, so a check that wrongly ACCEPTS serves the file and the panel
+// renders it — indistinguishable on screen from a correct read. Same reasoning,
+// and the same lookalike-prefix hole, as the origin test below.
+
+test('the directory itself and anything under it are inside', () => {
+  assert.equal(within('/repo/harness', '/repo/harness'), true);
+  assert.equal(within('/repo/harness', '/repo/harness/server/src/board.ts'), true);
+});
+
+test('a LOOKALIKE sibling is outside — the hole a bare prefix test would leave', () => {
+  assert.equal(within('/repo/harness', '/repo/harness-secrets/tokens.json'), false);
+});
+
+test('a walk out of the tree is outside once resolved', () => {
+  assert.equal(within('/repo/harness', resolve('/repo/harness', '../../etc/passwd')), false);
+});
+
+test('a root that already ends in a separator does not grow a second one', () => {
+  assert.equal(within('/', '/etc/passwd'), true);
 });
 
 // -- the one unstable field we parse ---------------------------------------

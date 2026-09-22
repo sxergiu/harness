@@ -357,6 +357,10 @@ web/src/
                       "working" looks like — board row, header and panels all read it
   Settings.tsx        rules, checkouts, the Claude files, the Herdr rule. One GET,
                       and every write answers with the whole view back
+  FileView.tsx        a file the agent named, read from disk into the right-hand
+                      split it shares with the fork panel
+  fileRef.ts          which code spans are worth a link. NOISE control, never the
+                      security one — `readAgentFile` re-checks whatever it sends
   Diff.tsx, Markdown.tsx, useHarness.ts
 ```
 

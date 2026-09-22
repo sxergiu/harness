@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { FeedEntry, FeedPage, FeedTurn } from '@harness/shared';
 import { CodeBlock } from './CodeBlock.js';
+import type { FileViewer } from './fileRef.js';
 import { Markdown } from './Markdown.js';
 import { Spinner } from './Status.js';
 import { useApi } from './useHarness.js';
@@ -17,7 +18,12 @@ import { useApi } from './useHarness.js';
  * which entry the human last typed.
  */
 export function Feed(
-  { paneId, tick, jump }: { paneId: string; tick: number; jump: number },
+  { paneId, tick, jump, viewer }: {
+    paneId: string;
+    tick: number;
+    jump: number;
+    viewer?: FileViewer;
+  },
 ): React.ReactElement {
   const { get } = useApi();
   const [turns, setTurns] = useState<FeedTurn[]>([]);
@@ -211,10 +217,10 @@ export function Feed(
                         : 'bg-transparent text-xs'
                     }`}
                   >
-                    <EntryRow entry={e} />
+                    <EntryRow entry={e} viewer={viewer} />
                   </div>
                 )
-                : <EntryRow key={i} entry={e} />
+                : <EntryRow key={i} entry={e} viewer={viewer} />
             )}
           </div>
         ))}
@@ -246,7 +252,9 @@ function merge(prev: FeedTurn[], turn: FeedTurn | null): FeedTurn[] {
  * same vocabulary the parent's feed uses — a tool call must not look like one
  * thing here and another thing there.
  */
-export function EntryRow({ entry }: { entry: FeedEntry }): React.ReactElement {
+export function EntryRow(
+  { entry, viewer }: { entry: FeedEntry; viewer?: FileViewer },
+): React.ReactElement {
   // A row that ran SQL starts open: the query is the point of the row, and
   // hiding it behind a click would leave the 80-char clipped summary as the
   // only thing on screen. Read once, so closing one keeps it closed through the
@@ -283,7 +291,7 @@ export function EntryRow({ entry }: { entry: FeedEntry }): React.ReactElement {
   }
 
   if (entry.kind === 'text') {
-    return <div className="my-2 text-neutral-300"><Markdown source={entry.text} /></div>;
+    return <div className="my-2 text-neutral-300"><Markdown source={entry.text} viewer={viewer} /></div>;
   }
 
   // A failed request stood in for the response. Shown as plain text — which is
@@ -333,7 +341,23 @@ export function EntryRow({ entry }: { entry: FeedEntry }): React.ReactElement {
       head={
         <>
           <span className="text-neutral-400">{entry.name}</span>
-          <span className="ml-2 truncate text-neutral-600">{entry.summary}</span>
+          {/*
+            A `span` and not a `button`: `Collapsible` renders this head inside
+            one, and a nested button is invalid. `stopPropagation` keeps the
+            click off the toggle. Not keyboard reachable, like the row's other
+            pointer gestures — the row itself still opens with the keyboard.
+          */}
+          {entry.path && viewer
+            ? (
+              <span
+                onClick={(e) => { e.stopPropagation(); viewer.open(entry.path!); }}
+                title={`Open ${entry.path}`}
+                className="ml-2 truncate text-neutral-400 underline decoration-dotted underline-offset-2 hover:text-neutral-200"
+              >
+                {entry.summary}
+              </span>
+            )
+            : <span className="ml-2 truncate text-neutral-600">{entry.summary}</span>}
           {entry.ok === false && <span className="ml-2 text-red-400">✗</span>}
           {entry.ok === true && <span className="ml-2 text-emerald-600">✓</span>}
           {/* No result yet: the call is still running, or waiting on you. */}

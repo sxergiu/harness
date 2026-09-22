@@ -2,7 +2,7 @@ import {
   closeSync, existsSync, openSync, readdirSync, readFileSync, readSync, statSync,
 } from 'node:fs';
 import { homedir } from 'node:os';
-import { basename, join, relative, sep } from 'node:path';
+import { basename, isAbsolute, join, relative, sep } from 'node:path';
 import type { AgentStatus, ContextUse, FeedEntry, FeedTurn, SubagentRow } from '@harness/shared';
 import { sqlOf } from './sql.js';
 
@@ -431,11 +431,33 @@ export function commandOf(e: Entry): { name: string; args: string } | null {
   return { name: name.startsWith('/') ? name : `/${name}`, args };
 }
 
+/** The file a tool call's primary argument names, as the agent gave it. */
+function fileArg(input: Record<string, unknown>): string | null {
+  return str(input.file_path) ?? str(input.notebook_path);
+}
+
+/**
+ * The file a tool call's summary names, relative to the cwd — the fact `summary`
+ * loses by being a string, and what the browser needs to offer a link.
+ *
+ * Null for anything outside the cwd, so no link is offered that the file route
+ * would then refuse. `isAbsolute` is the Windows case: `relative` across drives
+ * answers with an absolute path rather than a `..` walk.
+ */
+function openablePath(input: Record<string, unknown>, cwd: string): string | null {
+  const path = fileArg(input);
+  if (!path) return null;
+  const rel = relative(cwd, path).split(sep).join('/');
+  return !rel || rel.startsWith('../') || rel === '..' || isAbsolute(rel) ? null : rel;
+}
+
 /** The primary argument of a tool call, shortened for a one-line row. */
 function summarise(name: string, input: Record<string, unknown>, cwd: string): string {
   const pick = (k: string): string | null => (typeof input[k] === 'string' ? (input[k] as string) : null);
 
-  const path = pick('file_path') ?? pick('notebook_path');
+  // Displayed for every path, including one outside the cwd — which `../..` says
+  // plainly, and which `openablePath` above declines to make a link of.
+  const path = fileArg(input);
   if (path) return relative(cwd, path).split(sep).join('/') || basename(path);
 
   const direct =
@@ -612,6 +634,7 @@ function toolEntry(
     detail: outcome?.text ?? null,
     ok: outcome ? outcome.ok : null,
     sql: sqlOf(b.name ?? '', input),
+    path: openablePath(input, cwd),
   };
 }
 

@@ -4,8 +4,8 @@ import { test } from 'node:test';
 import { sameAccount } from '@harness/shared';
 import { statusOf } from './account.js';
 import { decide } from './claudeFiles.js';
-import { buildAgentDiff } from './diff.js';
-import { promptBoxHolds, staleServerWarning } from './herdr.js';
+import { buildAgentDiff, within } from './diff.js';
+import { announces, backoffMs, paneTookText, promptBoxHolds, staleServerWarning } from './herdr.js';
 import { parse as parseRecent } from './history.js';
 import { isOurs, merge, versionOf } from './herdrRules.js';
 import { shouldOpen, type Running } from './instance.js';
@@ -54,6 +54,41 @@ test('a slash-command menu below the box does not hide the box', () => {
   assert.equal(promptBoxHolds(pane), true);
 });
 
+// -- the answer nobody gave ------------------------------------------------
+// `sendText` used to send its Enter in the same call as the text. At a
+// selection dialog the text is swallowed and that Enter commits the highlighted
+// row, so a custom answer was dropped and an option the human never chose was
+// recorded as theirs. Both fixtures are a live AskUserQuestion, read before and
+// after sending "answer 4 with some words".
+
+const question = (rows: string[]): string => [
+  'Do you prefer cats or dogs?',
+  '',
+  ...rows,
+  'Enter to select · ↑/↓ to navigate · Esc to cancel',
+].join('\n');
+
+const unanswered = question(['❯ 1. Cats', '  2. Dogs', '  3. Type something.', '  4. Chat about this']);
+
+test('a dialog that SWALLOWED the text is byte-identical — so no Enter may follow', () => {
+  // Measured: md5 equal before and after, digits in the text included. Only real
+  // key presses move that highlight; text arrives as a paste and is discarded.
+  assert.equal(paneTookText(unanswered, unanswered), false);
+});
+
+test('the text row redrawing with the answer is what earns the Enter', () => {
+  const typed = question(['  1. Cats', '  2. Dogs', '❯ 3. I like both equally', '  4. Chat about this']);
+  assert.equal(paneTookText(unanswered, typed), true);
+});
+
+test('the signal is the SCREEN, not our words — a collapsed paste still counts', () => {
+  // Same trap as `promptBoxHolds`: Claude Code shows a paste as a placeholder
+  // holding none of what we sent, so looking for the text would refuse a send
+  // that in fact landed.
+  const pasted = question(['  1. Cats', '  2. Dogs', '❯ 3. [Pasted text #1 +61 lines]', '  4. Chat about this']);
+  assert.equal(paneTookText(unanswered, pasted), true);
+});
+
 // -- the upgrade trap ------------------------------------------------------
 
 test('a binary newer than the running server is reported', () => {
@@ -65,6 +100,36 @@ test('matching versions say nothing, and an unknown version is not a warning', (
   assert.equal(staleServerWarning('0.9.0', '0.9.0'), undefined);
   assert.equal(staleServerWarning(undefined, '0.9.0'), undefined);
   assert.equal(staleServerWarning('0.9.0', undefined), undefined);
+});
+
+// -- the retry that destroyed the log --------------------------------------
+// A Herdr that is not running fails every retry with the same ENOENT, and `fail`
+// reported each one. That is ~104 bytes a second into a file whose 1 MB cap
+// stops it recording ANYTHING further, so an outage of under three hours left
+// the next fault with nowhere to be written down.
+
+test('a repeated identical failure is NOT re-announced — the flood that capped the log', () => {
+  const down = { connected: false, error: 'connect ENOENT /home/u/.config/herdr/herdr.sock' };
+  assert.equal(announces(down, { ...down }), false);
+});
+
+test('a DIFFERENT failure is announced, so one fault cannot mask the next', () => {
+  const down = { connected: false, error: 'connect ENOENT /home/u/.config/herdr/herdr.sock' };
+  assert.equal(announces(down, { connected: false, error: 'herdr ping timed out' }), true);
+});
+
+test('coming up and going down are both announced', () => {
+  assert.equal(announces({ connected: false, error: 'gone' }, { connected: true }), true);
+  assert.equal(announces({ connected: true }, { connected: false, error: 'gone' }), true);
+});
+
+test('the first state is always news, however unremarkable', () => {
+  assert.equal(announces(null, { connected: true }), true);
+  assert.equal(announces(null, { connected: false, error: 'gone' }), true);
+});
+
+test('backoff climbs and caps near the board heartbeat', () => {
+  assert.deepEqual([0, 1, 2, 3, 4, 5, 20].map(backoffMs), [1000, 2000, 4000, 8000, 10000, 10000, 10000]);
 });
 
 // -- the request boundary --------------------------------------------------
@@ -124,6 +189,29 @@ test('a string or array toolUseResult is not a write', () => {
     { type: 'assistant', toolUseResult: ['a', 'b'] },
   ] as unknown as Entry[];
   assert.equal(buildAgentDiff(notWrites, '/repo').files.length, 0);
+});
+
+// -- the file route's containment check -------------------------------------
+// `readAgentFile` serves any path resolving inside an agent's cwd to a browser
+// with no auth, so a check that wrongly ACCEPTS serves the file and the panel
+// renders it — indistinguishable on screen from a correct read. Same reasoning,
+// and the same lookalike-prefix hole, as the origin test below.
+
+test('the directory itself and anything under it are inside', () => {
+  assert.equal(within('/repo/harness', '/repo/harness'), true);
+  assert.equal(within('/repo/harness', '/repo/harness/server/src/board.ts'), true);
+});
+
+test('a LOOKALIKE sibling is outside — the hole a bare prefix test would leave', () => {
+  assert.equal(within('/repo/harness', '/repo/harness-secrets/tokens.json'), false);
+});
+
+test('a walk out of the tree is outside once resolved', () => {
+  assert.equal(within('/repo/harness', resolve('/repo/harness', '../../etc/passwd')), false);
+});
+
+test('a root that already ends in a separator does not grow a second one', () => {
+  assert.equal(within('/', '/etc/passwd'), true);
 });
 
 // -- the one unstable field we parse ---------------------------------------

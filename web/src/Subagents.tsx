@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { FeedEntry, SubagentRow, SubagentsView } from '@harness/shared';
 import { EntryRow } from './Feed.js';
+import type { FileViewer } from './fileRef.js';
 import { Spinner, SubagentDot, subagentText } from './Status.js';
 import { useApi } from './useHarness.js';
 
@@ -17,7 +18,9 @@ import { useApi } from './useHarness.js';
  * a handful; split reads like the diff and is best once the list is long enough
  * that scrolling past one subagent to reach another becomes the cost.
  */
-export function SubagentsTab({ paneId, tick }: { paneId: string; tick: number }): React.ReactElement {
+export function SubagentsTab(
+  { paneId, tick, viewer }: { paneId: string; tick: number; viewer?: FileViewer },
+): React.ReactElement {
   const { get } = useApi();
   const [rows, setRows] = useState<SubagentRow[] | null>(null);
   const [failed, setFailed] = useState<string | null>(null);
@@ -93,7 +96,7 @@ export function SubagentsTab({ paneId, tick }: { paneId: string; tick: number })
               </button>
               {open.has(row.agentId) && (
                 <div className="ml-4 border-l border-neutral-800 pl-2">
-                  <Detail paneId={paneId} row={row} tick={tick} />
+                  <Detail paneId={paneId} row={row} tick={tick} viewer={viewer} />
                 </div>
               )}
             </div>
@@ -115,7 +118,7 @@ export function SubagentsTab({ paneId, tick }: { paneId: string; tick: number })
             ))}
           </nav>
           <div className="min-w-0 flex-1 overflow-auto p-2">
-            <Detail paneId={paneId} row={current} tick={tick} />
+            <Detail paneId={paneId} row={current} tick={tick} viewer={viewer} />
           </div>
         </div>
       )}
@@ -170,11 +173,16 @@ function Summary(
  * board's tick, so an open running subagent updates as it works.
  */
 function Detail(
-  { paneId, row, tick }: { paneId: string; row: SubagentRow; tick: number },
+  { paneId, row, tick, viewer }: {
+    paneId: string;
+    row: SubagentRow;
+    tick: number;
+    viewer?: FileViewer;
+  },
 ): React.ReactElement {
   return (
     <>
-      <SubagentFeed paneId={paneId} agentId={row.agentId} tick={tick} />
+      <SubagentFeed paneId={paneId} agentId={row.agentId} tick={tick} viewer={viewer} />
       {row.output !== null && (
         <div className="my-2 rounded border border-neutral-800 bg-neutral-900/50 p-2">
           <div className="mb-1 text-neutral-500">returned to the parent</div>
@@ -193,7 +201,12 @@ function Detail(
 }
 
 function SubagentFeed(
-  { paneId, agentId, tick }: { paneId: string; agentId: string; tick: number },
+  { paneId, agentId, tick, viewer }: {
+    paneId: string;
+    agentId: string;
+    tick: number;
+    viewer?: FileViewer;
+  },
 ): React.ReactElement {
   const { get } = useApi();
   const [entries, setEntries] = useState<FeedEntry[] | null>(null);
@@ -215,7 +228,7 @@ function SubagentFeed(
   if (entries.length === 0) {
     return <p className="text-neutral-600">Nothing recorded in this subagent's transcript yet.</p>;
   }
-  return <>{entries.map((e, i) => <EntryRow key={i} entry={e} />)}</>;
+  return <>{entries.map((e, i) => <EntryRow key={i} entry={e} viewer={viewer} />)}</>;
 }
 
 /** "4m" / "31s" — subagents are minutes-scale, so seconds matter below one. */

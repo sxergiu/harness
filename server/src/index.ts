@@ -16,7 +16,7 @@ import { Account } from './account.js';
 import { Aside } from './aside.js';
 import { Board } from './board.js';
 import { claudeFiles, installClaudeFiles } from './claudeFiles.js';
-import { buildAgentDiff, readTouchedFile, touchedPaths } from './diff.js';
+import { buildAgentDiff, readAgentFile, touchedPaths } from './diff.js';
 import { Herdr } from './herdr.js';
 import { herdrRuleState, installHerdrRule, type HerdrRuleOutcome } from './herdrRules.js';
 import { History } from './history.js';
@@ -366,23 +366,25 @@ app.get<{ Params: { paneId: string } }>('/api/agents/:paneId/diff', async (req, 
 });
 
 /**
- * One file from that changelist, as it is on disk now — what the diff view's
- * copy button hands you. The path must be one THIS agent wrote: the check is
- * not decoration, it is the only thing standing between a browser with no auth
- * and every file on the machine.
+ * One file this agent may be asked about, as it is on disk now — what the diff
+ * view's copy button hands you, and what the file panel reads when you click a
+ * reference. A path THIS agent wrote is admitted wherever it lives; anything
+ * else must resolve inside the agent's own cwd. That check is not decoration, it
+ * is the only thing standing between a browser with no auth and every file on
+ * the machine, and it lives in `readAgentFile` so there is one of it.
  */
 app.get<{ Params: { paneId: string }; Querystring: { path?: string } }>(
   '/api/agents/:paneId/file',
   async (req, reply) => {
-    if (!board.row(req.params.paneId)) return reply.code(404).send({ error: 'no such agent' });
-
-    const path = req.query.path ?? '';
-    if (!touchedPaths(board.entries(req.params.paneId)).includes(path)) {
-      return reply.code(404).send({ error: 'this agent did not write that file' });
-    }
+    const row = board.row(req.params.paneId);
+    if (!row) return reply.code(404).send({ error: 'no such agent' });
 
     try {
-      return { path, content: readTouchedFile(path) } satisfies FileContent;
+      return readAgentFile(
+        row.cwd,
+        req.query.path ?? '',
+        touchedPaths(board.entries(req.params.paneId)),
+      ) satisfies FileContent;
     } catch (err) {
       return reply.code(409).send({ error: (err as Error).message });
     }

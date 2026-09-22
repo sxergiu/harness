@@ -1,7 +1,9 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { AgentRow, AsideView, BlockedView } from '@harness/shared';
 import { DiffTab } from './Diff.js';
 import { EntryRow, Feed } from './Feed.js';
+import type { FileViewer } from './fileRef.js';
+import { FileView } from './FileView.js';
 import { ContextMeter, Spinner, StatusDot, Working } from './Status.js';
 import { SubagentsTab } from './Subagents.js';
 import { since, useApi } from './useHarness.js';
@@ -24,13 +26,21 @@ export const PROMPT_ROW_H = 26;
 const MAX_VH = 60;
 
 /**
- * Opening width of the aside in px, the floor a drag may not go under, and the
- * ceiling in vw — past which the split has stopped being a feed with a question
- * beside it.
+ * Opening width of the right-hand split in px, the floor a drag may not go
+ * under, and the ceiling in vw — past which the split has stopped being a feed
+ * with something beside it. One set of numbers for whichever companion is in the
+ * slot, so the width you dragged survives switching between them.
  */
-const ASIDE_W = 420;
-const ASIDE_MIN_W = 260;
-const ASIDE_MAX_VW = 70;
+const SPLIT_W = 420;
+const SPLIT_MIN_W = 260;
+const SPLIT_MAX_VW = 70;
+
+/**
+ * What is in the right-hand split. One piece of state rather than a flag each,
+ * for the same reason `Composing` below is: mutual exclusion is then a fact about
+ * the slot instead of a rule two handlers have to keep remembering.
+ */
+type Companion = 'fork' | 'file';
 
 /**
  * How the prompt box decides its height.
@@ -168,13 +178,19 @@ export function AgentView(
   /** /clear destroys a conversation, so it does not fire on one click. */
   const [confirmClear, setConfirmClear] = useState(false);
   /**
-   * The aside splits this view rather than replacing a tab, because the whole
-   * point of it is reading the output and the answer at the same time. It is
-   * not remembered: the view remounts on `paneId:sessionUuid`, so a `/clear`
-   * shuts a panel whose fork is of a conversation that no longer exists.
+   * The companion splits this view rather than replacing a tab, because the
+   * whole point of both of them is reading the output and the answer — or the
+   * file — at the same time. Not remembered: the view remounts on
+   * `paneId:sessionUuid`, so a `/clear` shuts a panel whose fork is of a
+   * conversation that no longer exists.
    */
-  const [asideOpen, setAsideOpen] = useState(false);
-  const [asideW, setAsideW] = useState(ASIDE_W);
+  const [companion, setCompanion] = useState<Companion | null>(null);
+  const [splitW, setSplitW] = useState(SPLIT_W);
+  /**
+   * The file the viewer is showing, kept while the fork is in front of it so
+   * switching back does not lose your place.
+   */
+  const [file, setFile] = useState<string | null>(null);
   /**
    * `/goal`, `/feature` and `/investigate` each take a sentence, and the two
    * assignments set the same slot — so all three share one box and which button
@@ -284,18 +300,18 @@ export function AgentView(
   };
 
   /**
-   * The same drag as the prompt box's, turned on its side: the aside is dragged
+   * The same drag as the prompt box's, turned on its side: the split is dragged
    * by its left border, and left is where it grows. Bound to the window for the
    * same reason — the pointer outruns an 8px target, and a cancelled press is a
    * release that never arrives.
    */
-  const startAsideResize = (e: React.PointerEvent): void => {
+  const startSplitResize = (e: React.PointerEvent): void => {
     e.preventDefault();
     const originX = e.clientX;
-    const originW = asideW;
-    const ceiling = (window.innerWidth * ASIDE_MAX_VW) / 100;
+    const originW = splitW;
+    const ceiling = (window.innerWidth * SPLIT_MAX_VW) / 100;
     const move = (ev: PointerEvent): void =>
-      setAsideW(Math.max(ASIDE_MIN_W, Math.min(ceiling, originW + originX - ev.clientX)));
+      setSplitW(Math.max(SPLIT_MIN_W, Math.min(ceiling, originW + originX - ev.clientX)));
     const stop = (): void => {
       window.removeEventListener('pointermove', move);
       window.removeEventListener('pointerup', stop);
@@ -360,6 +376,16 @@ export function AgentView(
     );
   };
 
+  /**
+   * What a file reference does when clicked, wherever it appears — a tool row, a
+   * code span in the agent's prose, a code span in a file the panel is already
+   * showing. Memoised on the cwd alone, since the setters are stable.
+   */
+  const viewer = useMemo<FileViewer>(
+    () => ({ cwd: agent.cwd, open: (p) => { setFile(p); setCompanion('file'); } }),
+    [agent.cwd],
+  );
+
   /** Sends whichever command opened the box, and shuts it. */
   const compose = async (): Promise<void> => {
     const text = composeText.trim();
@@ -401,8 +427,8 @@ export function AgentView(
                 showing, so it opens beside them rather than over them.
               */}
               <button
-                onClick={() => setAsideOpen(!asideOpen)}
-                className={asideOpen ? 'text-neutral-200' : 'text-neutral-400 hover:text-neutral-200'}
+                onClick={() => setCompanion(companion === 'fork' ? null : 'fork')}
+                className={companion === 'fork' ? 'text-neutral-200' : 'text-neutral-400 hover:text-neutral-200'}
                 title="Ask about this without spending the agent's turn — forks the session, so its feed does not move"
               >
                 fork
@@ -565,29 +591,57 @@ export function AgentView(
       </nav>
 
       {/*
-        The aside splits this row, not the whole view: the prompt bar below
+        The companion splits this row, not the whole view: the prompt bar below
         stays full width and stays the PARENT's, which is the one confusion a
         second input in the same view could cause. Because it is beside the tab
         rather than inside one, a question about the diff is asked the same way
         as a question about the feed.
+
+        One companion at a time. Switching away from the fork only UNMOUNTS its
+        panel — `drop` is the one thing that ends the forked agent, so the fork
+        keeps running and is found again by name on the next fetch, with its whole
+        exchange. What that costs is the draft in its box, which is the right
+        trade against keeping a hidden panel's tick-driven fetch alive.
       */}
       <div className="flex min-h-0 flex-1 overflow-hidden">
         {/* Each tab owns its own height: the diff scrolls its tree and its hunks
             apart, and the feed needs its scrollport to be its own element. */}
         <div className="min-w-0 flex-1 overflow-hidden">
-          {tab === 'feed' && <Feed paneId={agent.paneId} tick={tick} jump={jump} />}
+          {tab === 'feed' && <Feed paneId={agent.paneId} tick={tick} jump={jump} viewer={viewer} />}
           {tab === 'diff' && <DiffTab paneId={agent.paneId} tick={tick} />}
-          {tab === 'subagents' && <SubagentsTab paneId={agent.paneId} tick={tick} />}
+          {tab === 'subagents' && (
+            <SubagentsTab paneId={agent.paneId} tick={tick} viewer={viewer} />
+          )}
         </div>
-        {asideOpen && (
+        {companion && (
           <>
             <div
-              onPointerDown={startAsideResize}
+              onPointerDown={startSplitResize}
               title="Drag to resize"
               className="w-1 shrink-0 cursor-ew-resize bg-neutral-800 hover:bg-neutral-600"
             />
-            <div style={{ width: asideW }} className="min-w-0 shrink-0 overflow-hidden">
-              <AsidePanel paneId={agent.paneId} tick={tick} onClose={() => setAsideOpen(false)} />
+            <div style={{ width: splitW }} className="min-w-0 shrink-0 overflow-hidden">
+              {companion === 'fork'
+                ? (
+                  <AsidePanel
+                    paneId={agent.paneId}
+                    tick={tick}
+                    viewer={viewer}
+                    onClose={() => setCompanion(null)}
+                  />
+                )
+                : file && (
+                  // Keyed on the path, as the diff's copy button is: opening
+                  // another file is a fresh panel rather than new content
+                  // arriving under the heading of the last one.
+                  <FileView
+                    key={file}
+                    paneId={agent.paneId}
+                    path={file}
+                    viewer={viewer}
+                    onClose={() => setCompanion(null)}
+                  />
+                )}
             </div>
           </>
         )}
@@ -728,7 +782,12 @@ export function AgentView(
  * the session — which is slow the first time, and says so.
  */
 function AsidePanel(
-  { paneId, tick, onClose }: { paneId: string; tick: number; onClose: () => void },
+  { paneId, tick, viewer, onClose }: {
+    paneId: string;
+    tick: number;
+    viewer: FileViewer;
+    onClose: () => void;
+  },
 ): React.ReactElement {
   const { get, post } = useApi();
   const [view, setView] = useState<AsideView | null>(null);
@@ -837,7 +896,7 @@ function AsidePanel(
 
       <div className="min-h-0 flex-1 overflow-y-auto px-2 py-1">
         {view?.entries.length
-          ? view.entries.map((entry, i) => <EntryRow key={i} entry={entry} />)
+          ? view.entries.map((entry, i) => <EntryRow key={i} entry={entry} viewer={viewer} />)
           : (
             <p className="py-2 text-neutral-600">
               {busy && !open
@@ -901,6 +960,7 @@ function Blocked({ paneId }: { paneId: string }): React.ReactElement {
   const [text, setText] = useState<string | null>(null);
   const [reload, setReload] = useState(0);
   const [reply, setReply] = useState('');
+  const [failed, setFailed] = useState<string | null>(null);
 
   useEffect(() => {
     let live = true;
@@ -911,6 +971,7 @@ function Blocked({ paneId }: { paneId: string }): React.ReactElement {
   }, [get, paneId, reload]);
 
   const key = async (k: string): Promise<void> => {
+    setFailed(null);
     try {
       await post(`/api/agents/${paneId}/keys`, { keys: [k] });
     } catch { /* the re-read below will show that nothing changed */ }
@@ -921,14 +982,24 @@ function Blocked({ paneId }: { paneId: string }): React.ReactElement {
    * The other kind of answer. Some prompts do not want a number at all — "tell
    * Claude what to do differently" opens a text box, and pressing 1..4 at it
    * types a digit. Same optimism as the keys: typed, submitted, then re-read.
+   *
+   * The box is cleared only once the server says the words landed. A selection
+   * dialog swallows text and leaves no trace of it (see `sendText`), and the
+   * refusal that comes back is about a sentence the human wrote — asking them
+   * to type it again, after we dropped it, is the one thing worth avoiding
+   * here. So it stays put with the reason above it, and the row they need to
+   * highlight first is an arrow key away.
    */
   const answer = async (): Promise<void> => {
     const value = reply.trim();
     if (!value) return;
-    setReply('');
+    setFailed(null);
     try {
       await post(`/api/agents/${paneId}/text`, { text: value });
-    } catch { /* the re-read shows whether it landed */ }
+      setReply('');
+    } catch (e) {
+      setFailed((e as Error).message);
+    }
     setTimeout(() => setReload((n) => n + 1), 400);
   };
 
@@ -960,6 +1031,8 @@ function Blocked({ paneId }: { paneId: string }): React.ReactElement {
           refresh
         </button>
       </div>
+
+      {failed && <p className="mt-2 rounded bg-amber-900/40 px-2 py-1 text-amber-200">{failed}</p>}
 
       <input
         value={reply}

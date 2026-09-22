@@ -1,6 +1,6 @@
-import { readFileSync, existsSync, statSync } from 'node:fs';
-import { relative, extname, sep } from 'node:path';
-import type { AgentDiff, DiffFile, DiffHunk, DiffLine } from '@harness/shared';
+import { readFileSync, existsSync, realpathSync, statSync } from 'node:fs';
+import { basename, relative, extname, resolve, sep } from 'node:path';
+import type { AgentDiff, DiffFile, DiffHunk, DiffLine, FileContent } from '@harness/shared';
 import type { Entry } from './transcript.js';
 
 /** 2 MB. Past this we report the file rather than diffing it. */
@@ -231,16 +231,76 @@ export function touchedPaths(entries: Entry[]): string[] {
 }
 
 /**
- * A touched file as it is on disk now. Same ceiling as the staleness read —
- * anything past it is not something a browser should be asked to hold — and the
- * caller must have checked the path against `touchedPaths` first, which is what
- * keeps this from being an arbitrary-file read.
+ * Whether `path` is `root` or something under it. Both must ALREADY be
+ * realpath'd — resolving symlinks is the caller's job, which is what leaves this
+ * a pure function over two strings.
+ *
+ * The separator carries the whole check, and leaving it out is the same mistake
+ * `origin.ts` guards against with hostnames: `/repo/harness-secrets` starts with
+ * `/repo/harness` and is a different tree.
  */
-export function readTouchedFile(path: string): string {
+export function within(root: string, path: string): boolean {
+  if (!root || !path) return false;
+  return path === root || path.startsWith(root.endsWith(sep) ? root : root + sep);
+}
+
+/**
+ * A file this agent may be asked about, as it is on disk now — what the diff
+ * view's copy button hands you and what the file panel reads.
+ *
+ * TWO WAYS IN, and the union is deliberate. A path the agent WROTE is admitted
+ * wherever it lives, because an agent in a checkout editing `~/.claude/...` is
+ * ordinary here and the diff lists it; anything else must resolve inside the
+ * agent's own cwd. Between them they are the only thing standing between a
+ * browser with no auth and every file on the machine, so: `resolve` first, which
+ * flattens `..` before anything looks at the path, then `realpathSync` on the
+ * FILE rather than its directory, so a symlink under the checkout pointing out
+ * of it is refused rather than followed.
+ *
+ * Case is not folded. macOS realpath does not canonicalise it, so a
+ * differently-cased path fails containment and reads as "outside" — the wrong
+ * answer in the safe direction, and lowercasing to fix it would loosen the check
+ * on every case-sensitive filesystem.
+ */
+export function readAgentFile(cwd: string, requested: string, touched: string[]): FileContent {
+  if (!requested || requested.includes('\0')) throw new Error('no path given');
+  const path = resolve(cwd, requested);
+
+  if (!touched.includes(path)) {
+    let root: string;
+    let real: string;
+    try {
+      root = realpathSync(cwd);
+      real = realpathSync(path);
+    } catch {
+      throw new Error('this file is not on disk');
+    }
+    if (!within(root, real)) throw new Error("that path is outside this agent's directory");
+  }
+
+  return {
+    path,
+    relPath: relative(cwd, path).split(sep).join('/') || basename(path),
+    language: LANGUAGES[extname(path).toLowerCase()] ?? null,
+    content: readCapped(path),
+  };
+}
+
+/**
+ * Same ceiling as the staleness read — anything past it is not something a
+ * browser should be asked to hold. A binary file comes back as replacement
+ * characters rather than throwing, which is what `utf8` does and is no worse
+ * than it has ever been here.
+ */
+function readCapped(path: string): string {
   if (!existsSync(path)) throw new Error('this file is no longer on disk');
-  const size = statSync(path).size;
+  const stat = statSync(path);
+  // Without this a directory reaches `readFileSync` and comes back as a raw
+  // EISDIR, which is the browser's error message too.
+  if (!stat.isFile()) throw new Error('that path is not a file');
+  const size = stat.size;
   if (size > MAX_DIFF_BYTES) {
-    throw new Error(`file is ${(size / 1024 / 1024).toFixed(1)} MB — too large to copy`);
+    throw new Error(`file is ${(size / 1024 / 1024).toFixed(1)} MB — too large to read`);
   }
   return readFileSync(path, 'utf8');
 }

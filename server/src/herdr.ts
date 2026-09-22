@@ -127,6 +127,27 @@ export function promptBoxHolds(pane: string): boolean {
   return box !== undefined && box.replace(/^\s*❯/, '').trim().length > 0;
 }
 
+/**
+ * Whether typed text reached the pane at all — the question `sendText` presses
+ * Enter on, and the reason that Enter is conditional.
+ *
+ * A SELECTION DIALOG SWALLOWS TEXT WHOLESALE. Measured against a live
+ * AskUserQuestion with an option row highlighted, `pane.send_input` of "answer
+ * 4 with some words" left the pane byte-identical (md5 equal before and after)
+ * — digits included, because only real key presses move that highlight, and
+ * text arrives as a paste rather than as keys. The same send with the prompt's
+ * own "Type something." row highlighted redrew it to `❯ 3. I like both
+ * equally`. So the screen answers this and nothing else does.
+ *
+ * Content-free for `promptBoxHolds`'s reason: Claude Code collapses a paste
+ * into `[Pasted text #1 +61 lines]`, so looking for the words we sent goes
+ * blind exactly where it matters. Anything at all changing is the signal, and
+ * the pane is quiet while it waits — it is blocked, so nothing else redraws it.
+ */
+export function paneTookText(before: string, after: string): boolean {
+  return before !== after;
+}
+
 /** What the `herdr` binary printed, or null if it is not on PATH or did not answer. */
 function cli(args: string[]): string | null {
   try {
@@ -232,6 +253,47 @@ export function asStatus(raw: string | undefined): AgentStatus {
   return (STATUS_ORDER as string[]).includes(raw ?? '') ? (raw as AgentStatus) : 'unknown';
 }
 
+const RETRY_MIN_MS = 1_000;
+
+/**
+ * Kept near the board's own 3s heartbeat rather than higher. The heartbeat
+ * resyncs whether or not the stream is ours, so a Herdr that comes back fills
+ * the board in ~3s — and a ceiling far above that would leave the banner saying
+ * "disconnected" over a board that was visibly moving, which is two parts of one
+ * window disagreeing.
+ */
+const RETRY_MAX_MS = 10_000;
+
+/** 1s, 2s, 4s, 8s, then 10s forever. */
+export function backoffMs(attempt: number): number {
+  return Math.min(RETRY_MIN_MS * 2 ** attempt, RETRY_MAX_MS);
+}
+
+export interface Connection {
+  connected: boolean;
+  error?: string;
+}
+
+/**
+ * Whether a transition is worth telling anyone about.
+ *
+ * `fail` used to report unconditionally, and a Herdr that is simply not running
+ * fails every retry with the same ENOENT — so the cockpit announced an identical
+ * disconnect once a second for as long as it was left open. That reached
+ * `log.ts`, whose 1 MB cap is not a rotation: past it the file records NOTHING
+ * further. Measured at ~104 bytes a line, an outage silenced the log in under
+ * three hours — the one artifact a bug report is built from, destroyed by the
+ * fault it exists to describe.
+ *
+ * Suppressing repeats is safe for a viewer that arrives mid-outage because it is
+ * not how one is told: `index.ts` re-sends the Herdr state on every WS connect,
+ * so a tab opened during an outage hears about it from that and not from a
+ * broadcast it was not there for.
+ */
+export function announces(prev: Connection | null, next: Connection): boolean {
+  return prev === null || prev.connected !== next.connected || prev.error !== next.error;
+}
+
 export interface PaneInfo {
   pane_id: string;
   workspace_id: string;
@@ -289,6 +351,10 @@ export class Herdr {
   /** The subscription connection. Nothing else is ever written to it. */
   private stream: Socket | null = null;
   private retry: ReturnType<typeof setTimeout> | null = null;
+  /** Consecutive failed stream attempts, and so how long the next one waits. */
+  private attempt = 0;
+  /** The last state anyone was told about — see `announces`. */
+  private announced: Connection | null = null;
   private stopped = false;
   connected = false;
 
@@ -345,12 +411,22 @@ export class Herdr {
 
   start(): void {
     this.stopped = false;
+    // Nothing has been said yet, so the first state reached — up or down — is
+    // news, and the first retry waits the floor. Without these a restart would
+    // inherit the last run's verdict and stay silent about matching it, and
+    // inherit its backoff and open at the ceiling.
+    this.announced = null;
+    this.attempt = 0;
     void this.openStream();
   }
 
   stop(): void {
     this.stopped = true;
     if (this.retry) clearTimeout(this.retry);
+    // Cleared, not merely stopped. `stopped` is what holds `scheduleRetry` off
+    // until a `start()` clears it; from then on a stale non-null handle would
+    // read as a retry already pending, and none would ever be armed again.
+    this.retry = null;
     this.stream?.destroy();
     this.stream = null;
     this.connected = false;
@@ -365,12 +441,40 @@ export class Herdr {
    * `stream` is cleared BEFORE the destroy so the close handler treats the old
    * socket as stale and skips its disconnect broadcast and its retry; otherwise
    * refreshing would flash "Herdr disconnected" and open a second stream.
+   *
+   * A pending retry is cancelled for the same reason, and that was missing: an
+   * outage always has one armed, so refreshing during one opened a stream here
+   * and left the retry to open a SECOND a moment later. Cancelling covers only
+   * a retry still ARMED, which is why `openStream` destroys whatever it is
+   * replacing rather than trusting this to have emptied the field — between a
+   * retry firing and its stream landing there is nothing here to cancel.
    */
   reconnect(): void {
+    if (this.retry) clearTimeout(this.retry);
+    this.retry = null;
+    // A human asking for the stream back is not a backed-off retry: the next
+    // failure after this should wait 1s, not wherever the outage had climbed to.
+    this.attempt = 0;
+    // Pressing refresh is always news. Without this the reclaim is silent —
+    // `announced` still says connected, since the destroy below is deliberately
+    // stale-by-identity and reports nothing — and silence is indistinguishable
+    // from the button having done nothing, on the one control whose whole
+    // purpose is curing a starvation that is invisible from the socket.
+    this.announced = null;
     const old = this.stream;
     this.stream = null;
     old?.destroy();
     void this.openStream();
+  }
+
+  /**
+   * The one way a connection state reaches anybody. Everything that reports goes
+   * through here so the dedup cannot be bypassed by a new call site.
+   */
+  private report(next: Connection): void {
+    if (!announces(this.announced, next)) return;
+    this.announced = next;
+    this.onConnectionChange(next.connected, next.error);
   }
 
   // -- the event stream -----------------------------------------------------
@@ -396,6 +500,15 @@ export class Herdr {
     }
 
     const sock = createConnection(path);
+    // Exclusive, because cancelling a pending retry cannot be: the timer nulls
+    // its own handle and then waits on `ping`, so for up to REQUEST_TIMEOUT_MS
+    // both `retry` and `stream` are null and a `reconnect` in that window sees
+    // nothing to cancel. Two streams then race, and the one that loses the
+    // identity check in `drop` is never destroyed and never retried — a
+    // subscribed socket leaked for the life of the process, which by invariant 2
+    // may be the one Herdr is feeding. Destroying here settles it whichever
+    // order they land in.
+    this.stream?.destroy();
     this.stream = sock;
     const decoder = new StringDecoder('utf8');
     let buf = '';
@@ -423,7 +536,8 @@ export class Herdr {
           this.onPush(msg.event);
         } else if (msg.result?.type === 'subscription_started') {
           this.connected = true;
-          this.onConnectionChange(true);
+          this.attempt = 0;
+          this.report({ connected: true });
           this.onPush('subscribed');
         }
       }
@@ -434,7 +548,10 @@ export class Herdr {
       this.stream = null;
       const wasConnected = this.connected;
       this.connected = false;
-      if (wasConnected || err) this.onConnectionChange(false, err?.message);
+      // The guard stays: a socket that closes having never subscribed and
+      // without an error says nothing the last `fail` has not already said
+      // better, and reporting it would overwrite that message with a blank one.
+      if (wasConnected || err) this.report({ connected: false, error: err?.message });
       this.scheduleRetry();
     };
 
@@ -444,16 +561,18 @@ export class Herdr {
 
   private fail(message: string): void {
     this.connected = false;
-    this.onConnectionChange(false, message);
+    this.report({ connected: false, error: message });
     this.scheduleRetry();
   }
 
   private scheduleRetry(): void {
     if (this.stopped || this.retry) return;
+    // Post-increment, so the first retry after a working connection waits the
+    // floor rather than a step up from it.
     this.retry = setTimeout(() => {
       this.retry = null;
       void this.openStream();
-    }, 1000);
+    }, backoffMs(this.attempt++));
   }
 
   // -- one-shot requests ----------------------------------------------------
@@ -567,11 +686,43 @@ export class Herdr {
    * like. Pane-level on purpose: `agent.*` refuses a target that is sitting at
    * a dialog, and this is answering the terminal, not prompting the agent.
    *
-   * Verified against a scratch pane: text lands on the command line and the
-   * trailing Enter submits it in the same call.
+   * THE ENTER IS CONDITIONAL, and that is the whole of this function. It used
+   * to ride along in the one `send_input` call, which is fine at a shell and
+   * puts words in the human's mouth at a dialog: measured on a live
+   * AskUserQuestion, typing a custom answer changed nothing on screen
+   * (`paneTookText`) and the trailing Enter committed whichever row happened to
+   * be highlighted — the agent recorded "→ Spaces" as the human's answer while
+   * what they actually wrote was discarded unseen. Sending it blind is not the
+   * optimism this path is built on; optimism is a keystroke you can see the
+   * result of, and this was a false answer attributed to someone.
+   *
+   * So: type, look, and only then submit. One extra read, inside the window
+   * `prompt` already waits — measured, a row that accepts the text redraws in
+   * 37ms against the 500ms allowed.
+   *
+   * REFUSING IS THE ANSWER, not a shortfall. Driving the human's words into a
+   * dialog means finding the row that takes words, which means parsing the
+   * prompt — the one thing this path does not do (see `BLOCKED_KEYS`). The
+   * caller is told instead, and the human highlights the row and sends again.
+   *
+   * This is also what makes `launchCommand`'s "the command was never typed"
+   * real rather than assumed: it had only the absence of a thrown request,
+   * which a swallowed command does not produce.
    */
-  sendText(paneId: string, text: string): Promise<unknown> {
-    return this.request('pane.send_input', { pane_id: paneId, text, keys: ['enter'] });
+  async sendText(paneId: string, text: string): Promise<unknown> {
+    const before = await this.read(paneId);
+    const result = await this.request('pane.send_input', { pane_id: paneId, text });
+
+    await new Promise((r) => setTimeout(r, SUBMIT_CHECK_MS));
+    if (!paneTookText(before, await this.read(paneId))) {
+      throw new Error(
+        'the pane ignored those words — a dialog like this takes keys, not text. '
+        + 'Highlight the row that asks for text (↑/↓), then send them again.',
+      );
+    }
+
+    await this.request('pane.send_input', { pane_id: paneId, keys: ['enter'] });
+    return result;
   }
 
   focus(target: string): Promise<unknown> {

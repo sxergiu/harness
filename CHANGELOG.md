@@ -80,6 +80,18 @@ What it does **not** do, deliberately:
 - **It does not refresh.** A file is read when you open it and when you ask again. Nothing
   reloads under a reader.
 
+### Fixed
+
+- The containment fixtures above were written as POSIX string literals, and `within` compares
+  against the platform separator — which is right for production, since both its arguments come
+  from `realpathSync` and are native paths. On Windows the two cases expecting `true` therefore
+  failed outright, and the lookalike-sibling case **passed for entirely the wrong reason**: a
+  comparison that matches nothing also matches nothing it ought to refuse. The fixtures are
+  built with `resolve`/`join` now, so the Windows leg measures the hole the test is named after
+  rather than the separator. Production was never affected. This is the `projects.json` fixture
+  bug of 0.2.0 arriving by the same door, which is its own argument for building every path in
+  a fixture rather than typing one.
+
 ### Unchanged
 
 Everything 0.2.0 said about its own limits still holds, and none of the work above tests them.

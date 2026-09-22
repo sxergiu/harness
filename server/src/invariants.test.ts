@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 import { test } from 'node:test';
 import { sameAccount } from '@harness/shared';
 import { statusOf } from './account.js';
@@ -196,22 +196,37 @@ test('a string or array toolUseResult is not a write', () => {
 // with no auth, so a check that wrongly ACCEPTS serves the file and the panel
 // renders it — indistinguishable on screen from a correct read. Same reasoning,
 // and the same lookalike-prefix hole, as the origin test below.
+//
+// EVERY FIXTURE HERE IS BUILT, NEVER WRITTEN AS A LITERAL. `within` compares
+// against the platform separator, which is right for production — both its
+// arguments come from `realpathSync`, so on Windows they are backslash paths —
+// and a POSIX literal therefore fails containment there for a reason that has
+// nothing to do with what is being tested. Measured: the two cases below that
+// expect `true` failed the Windows leg outright, and the lookalike PASSED, since
+// a comparison that matches nothing also matches nothing it should refuse. That
+// is the `projects.json` fixture bug of 0.2.0 by the same door.
+const repo = resolve('/repo/harness');
 
 test('the directory itself and anything under it are inside', () => {
-  assert.equal(within('/repo/harness', '/repo/harness'), true);
-  assert.equal(within('/repo/harness', '/repo/harness/server/src/board.ts'), true);
+  assert.equal(within(repo, repo), true);
+  assert.equal(within(repo, join(repo, 'server', 'src', 'board.ts')), true);
 });
 
 test('a LOOKALIKE sibling is outside — the hole a bare prefix test would leave', () => {
-  assert.equal(within('/repo/harness', '/repo/harness-secrets/tokens.json'), false);
+  assert.equal(within(repo, join(`${repo}-secrets`, 'tokens.json')), false);
 });
 
 test('a walk out of the tree is outside once resolved', () => {
-  assert.equal(within('/repo/harness', resolve('/repo/harness', '../../etc/passwd')), false);
+  assert.equal(within(repo, resolve(repo, '../../etc/passwd')), false);
 });
 
 test('a root that already ends in a separator does not grow a second one', () => {
-  assert.equal(within('/', '/etc/passwd'), true);
+  // `/` on POSIX, `C:\` on Windows — the one path that already carries its
+  // separator, and so the one that would grow a second. `resolve` answers it
+  // directly; `parse().root` would too and cannot be used, since this file
+  // already imports a `parse` of its own.
+  const root = resolve('/');
+  assert.equal(within(root, join(root, 'etc', 'passwd')), true);
 });
 
 // -- the one unstable field we parse ---------------------------------------

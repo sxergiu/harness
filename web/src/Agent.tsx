@@ -901,6 +901,7 @@ function Blocked({ paneId }: { paneId: string }): React.ReactElement {
   const [text, setText] = useState<string | null>(null);
   const [reload, setReload] = useState(0);
   const [reply, setReply] = useState('');
+  const [failed, setFailed] = useState<string | null>(null);
 
   useEffect(() => {
     let live = true;
@@ -911,6 +912,7 @@ function Blocked({ paneId }: { paneId: string }): React.ReactElement {
   }, [get, paneId, reload]);
 
   const key = async (k: string): Promise<void> => {
+    setFailed(null);
     try {
       await post(`/api/agents/${paneId}/keys`, { keys: [k] });
     } catch { /* the re-read below will show that nothing changed */ }
@@ -921,14 +923,24 @@ function Blocked({ paneId }: { paneId: string }): React.ReactElement {
    * The other kind of answer. Some prompts do not want a number at all — "tell
    * Claude what to do differently" opens a text box, and pressing 1..4 at it
    * types a digit. Same optimism as the keys: typed, submitted, then re-read.
+   *
+   * The box is cleared only once the server says the words landed. A selection
+   * dialog swallows text and leaves no trace of it (see `sendText`), and the
+   * refusal that comes back is about a sentence the human wrote — asking them
+   * to type it again, after we dropped it, is the one thing worth avoiding
+   * here. So it stays put with the reason above it, and the row they need to
+   * highlight first is an arrow key away.
    */
   const answer = async (): Promise<void> => {
     const value = reply.trim();
     if (!value) return;
-    setReply('');
+    setFailed(null);
     try {
       await post(`/api/agents/${paneId}/text`, { text: value });
-    } catch { /* the re-read shows whether it landed */ }
+      setReply('');
+    } catch (e) {
+      setFailed((e as Error).message);
+    }
     setTimeout(() => setReload((n) => n + 1), 400);
   };
 
@@ -960,6 +972,8 @@ function Blocked({ paneId }: { paneId: string }): React.ReactElement {
           refresh
         </button>
       </div>
+
+      {failed && <p className="mt-2 rounded bg-amber-900/40 px-2 py-1 text-amber-200">{failed}</p>}
 
       <input
         value={reply}

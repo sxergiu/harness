@@ -127,6 +127,27 @@ export function promptBoxHolds(pane: string): boolean {
   return box !== undefined && box.replace(/^\s*❯/, '').trim().length > 0;
 }
 
+/**
+ * Whether typed text reached the pane at all — the question `sendText` presses
+ * Enter on, and the reason that Enter is conditional.
+ *
+ * A SELECTION DIALOG SWALLOWS TEXT WHOLESALE. Measured against a live
+ * AskUserQuestion with an option row highlighted, `pane.send_input` of "answer
+ * 4 with some words" left the pane byte-identical (md5 equal before and after)
+ * — digits included, because only real key presses move that highlight, and
+ * text arrives as a paste rather than as keys. The same send with the prompt's
+ * own "Type something." row highlighted redrew it to `❯ 3. I like both
+ * equally`. So the screen answers this and nothing else does.
+ *
+ * Content-free for `promptBoxHolds`'s reason: Claude Code collapses a paste
+ * into `[Pasted text #1 +61 lines]`, so looking for the words we sent goes
+ * blind exactly where it matters. Anything at all changing is the signal, and
+ * the pane is quiet while it waits — it is blocked, so nothing else redraws it.
+ */
+export function paneTookText(before: string, after: string): boolean {
+  return before !== after;
+}
+
 /** What the `herdr` binary printed, or null if it is not on PATH or did not answer. */
 function cli(args: string[]): string | null {
   try {
@@ -665,11 +686,43 @@ export class Herdr {
    * like. Pane-level on purpose: `agent.*` refuses a target that is sitting at
    * a dialog, and this is answering the terminal, not prompting the agent.
    *
-   * Verified against a scratch pane: text lands on the command line and the
-   * trailing Enter submits it in the same call.
+   * THE ENTER IS CONDITIONAL, and that is the whole of this function. It used
+   * to ride along in the one `send_input` call, which is fine at a shell and
+   * puts words in the human's mouth at a dialog: measured on a live
+   * AskUserQuestion, typing a custom answer changed nothing on screen
+   * (`paneTookText`) and the trailing Enter committed whichever row happened to
+   * be highlighted — the agent recorded "→ Spaces" as the human's answer while
+   * what they actually wrote was discarded unseen. Sending it blind is not the
+   * optimism this path is built on; optimism is a keystroke you can see the
+   * result of, and this was a false answer attributed to someone.
+   *
+   * So: type, look, and only then submit. One extra read, inside the window
+   * `prompt` already waits — measured, a row that accepts the text redraws in
+   * 37ms against the 500ms allowed.
+   *
+   * REFUSING IS THE ANSWER, not a shortfall. Driving the human's words into a
+   * dialog means finding the row that takes words, which means parsing the
+   * prompt — the one thing this path does not do (see `BLOCKED_KEYS`). The
+   * caller is told instead, and the human highlights the row and sends again.
+   *
+   * This is also what makes `launchCommand`'s "the command was never typed"
+   * real rather than assumed: it had only the absence of a thrown request,
+   * which a swallowed command does not produce.
    */
-  sendText(paneId: string, text: string): Promise<unknown> {
-    return this.request('pane.send_input', { pane_id: paneId, text, keys: ['enter'] });
+  async sendText(paneId: string, text: string): Promise<unknown> {
+    const before = await this.read(paneId);
+    const result = await this.request('pane.send_input', { pane_id: paneId, text });
+
+    await new Promise((r) => setTimeout(r, SUBMIT_CHECK_MS));
+    if (!paneTookText(before, await this.read(paneId))) {
+      throw new Error(
+        'the pane ignored those words — a dialog like this takes keys, not text. '
+        + 'Highlight the row that asks for text (↑/↓), then send them again.',
+      );
+    }
+
+    await this.request('pane.send_input', { pane_id: paneId, keys: ['enter'] });
+    return result;
   }
 
   focus(target: string): Promise<unknown> {

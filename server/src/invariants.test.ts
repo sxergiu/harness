@@ -5,7 +5,7 @@ import { sameAccount } from '@harness/shared';
 import { statusOf } from './account.js';
 import { decide } from './claudeFiles.js';
 import { buildAgentDiff } from './diff.js';
-import { announces, backoffMs, promptBoxHolds, staleServerWarning } from './herdr.js';
+import { announces, backoffMs, paneTookText, promptBoxHolds, staleServerWarning } from './herdr.js';
 import { parse as parseRecent } from './history.js';
 import { isOurs, merge, versionOf } from './herdrRules.js';
 import { shouldOpen, type Running } from './instance.js';
@@ -52,6 +52,41 @@ test('only the LAST prompt line counts — earlier ones are scrollback echoes', 
 test('a slash-command menu below the box does not hide the box', () => {
   const pane = ['❯ /exit', '  /clear    Clear conversation', '  /exit     Exit', '  /help'].join('\n');
   assert.equal(promptBoxHolds(pane), true);
+});
+
+// -- the answer nobody gave ------------------------------------------------
+// `sendText` used to send its Enter in the same call as the text. At a
+// selection dialog the text is swallowed and that Enter commits the highlighted
+// row, so a custom answer was dropped and an option the human never chose was
+// recorded as theirs. Both fixtures are a live AskUserQuestion, read before and
+// after sending "answer 4 with some words".
+
+const question = (rows: string[]): string => [
+  'Do you prefer cats or dogs?',
+  '',
+  ...rows,
+  'Enter to select · ↑/↓ to navigate · Esc to cancel',
+].join('\n');
+
+const unanswered = question(['❯ 1. Cats', '  2. Dogs', '  3. Type something.', '  4. Chat about this']);
+
+test('a dialog that SWALLOWED the text is byte-identical — so no Enter may follow', () => {
+  // Measured: md5 equal before and after, digits in the text included. Only real
+  // key presses move that highlight; text arrives as a paste and is discarded.
+  assert.equal(paneTookText(unanswered, unanswered), false);
+});
+
+test('the text row redrawing with the answer is what earns the Enter', () => {
+  const typed = question(['  1. Cats', '  2. Dogs', '❯ 3. I like both equally', '  4. Chat about this']);
+  assert.equal(paneTookText(unanswered, typed), true);
+});
+
+test('the signal is the SCREEN, not our words — a collapsed paste still counts', () => {
+  // Same trap as `promptBoxHolds`: Claude Code shows a paste as a placeholder
+  // holding none of what we sent, so looking for the text would refuse a send
+  // that in fact landed.
+  const pasted = question(['  1. Cats', '  2. Dogs', '❯ 3. [Pasted text #1 +61 lines]', '  4. Chat about this']);
+  assert.equal(paneTookText(unanswered, pasted), true);
 });
 
 // -- the upgrade trap ------------------------------------------------------

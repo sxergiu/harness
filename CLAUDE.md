@@ -593,6 +593,19 @@ foot of the board because that is where the bars that prompt it are.
   single-select has no such row and Enter does submit, which is why this failed only
   sometimes. The keys stay plain: a `submit` button sending `right enter` would be parsing
   the prompt by assumption, which is exactly what this panel does not do.
+  **The TEXT answer is the exception, and its Enter is conditional.** Optimism works for a
+  keystroke, whose result you can see; it cannot work for words, because a selection dialog
+  SWALLOWS text and the Enter riding along in the same `send_input` then commits whichever
+  row was highlighted. Measured on a live AskUserQuestion: sending a custom answer left the
+  pane byte-identical — digits included, since text arrives as a paste and only real key
+  presses move that highlight — and the agent recorded `→ Spaces`, an option the human never
+  chose, while what they wrote was discarded unseen. That is not a missed answer but a false
+  one attributed to them, which is why `sendText` now reads the pane between the text and the
+  Enter and REFUSES rather than guesses. The test is that the screen changed at all, never
+  that it holds our words — same trap as `promptBoxHolds`, since a paste renders as
+  `[Pasted text #1 …]`. Refusing is the whole answer available: driving words into the right
+  row means finding it, which means parsing the prompt. The human highlights it (`↑/↓`) and
+  sends again, and the panel keeps their sentence in the box meanwhile.
 - **Context usage is exact; its window is inferred.** `contextOf` sums `input_tokens +
   cache_read + cache_creation` of the newest non-sidechain `assistant` entry — that IS what
   the model was sent, and a compaction shows up for free as the next request measuring less.

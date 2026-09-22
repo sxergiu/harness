@@ -45,6 +45,8 @@ export class Board {
   private workspaces: WorkspaceRow[] = [];
   private transcripts = new Transcripts();
   private timer: ReturnType<typeof setTimeout> | null = null;
+  /** A snapshot is outstanding — see `schedule`, which drops rather than queues. */
+  private inFlight = false;
   /**
    * paneId → the name WE last set. Anything else on a pane was named by the
    * human, and is never overwritten.
@@ -100,12 +102,29 @@ export class Board {
     setInterval(() => this.schedule(), HEARTBEAT_MS).unref();
   }
 
-  /** Coalesces a burst of pushes into one snapshot read. */
+  /**
+   * Coalesces a burst of pushes into one snapshot read.
+   *
+   * A resync already in flight wins, and the new one is DROPPED rather than
+   * queued. Two passes overlap only when a snapshot outlives the heartbeat — the
+   * request timeout is 10s against a 3s beat — and when they did, both read the
+   * same unmutated `rows` as their `prev`, so both saw the same transition and
+   * both announced it: two desktop alerts, two sounds and two Herdr toasts for
+   * one agent going blocked.
+   *
+   * Dropping costs nothing this file does not already accept. The heartbeat is
+   * unconditional, so the board converges within one beat of the slow snapshot
+   * landing — which is invariant 6's own position that losing a push costs
+   * freshness rather than correctness, applied to the one case where the push
+   * was ours all along.
+   */
   schedule(): void {
     if (this.timer) return;
     this.timer = setTimeout(() => {
       this.timer = null;
-      void this.resync();
+      if (this.inFlight) return;
+      this.inFlight = true;
+      void this.resync().finally(() => { this.inFlight = false; });
     }, DEBOUNCE_MS);
   }
 

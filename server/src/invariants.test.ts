@@ -5,7 +5,7 @@ import { sameAccount } from '@harness/shared';
 import { statusOf } from './account.js';
 import { decide } from './claudeFiles.js';
 import { buildAgentDiff } from './diff.js';
-import { promptBoxHolds, staleServerWarning } from './herdr.js';
+import { announces, backoffMs, promptBoxHolds, staleServerWarning } from './herdr.js';
 import { parse as parseRecent } from './history.js';
 import { isOurs, merge, versionOf } from './herdrRules.js';
 import { shouldOpen, type Running } from './instance.js';
@@ -65,6 +65,36 @@ test('matching versions say nothing, and an unknown version is not a warning', (
   assert.equal(staleServerWarning('0.9.0', '0.9.0'), undefined);
   assert.equal(staleServerWarning(undefined, '0.9.0'), undefined);
   assert.equal(staleServerWarning('0.9.0', undefined), undefined);
+});
+
+// -- the retry that destroyed the log --------------------------------------
+// A Herdr that is not running fails every retry with the same ENOENT, and `fail`
+// reported each one. That is ~104 bytes a second into a file whose 1 MB cap
+// stops it recording ANYTHING further, so an outage of under three hours left
+// the next fault with nowhere to be written down.
+
+test('a repeated identical failure is NOT re-announced — the flood that capped the log', () => {
+  const down = { connected: false, error: 'connect ENOENT /home/u/.config/herdr/herdr.sock' };
+  assert.equal(announces(down, { ...down }), false);
+});
+
+test('a DIFFERENT failure is announced, so one fault cannot mask the next', () => {
+  const down = { connected: false, error: 'connect ENOENT /home/u/.config/herdr/herdr.sock' };
+  assert.equal(announces(down, { connected: false, error: 'herdr ping timed out' }), true);
+});
+
+test('coming up and going down are both announced', () => {
+  assert.equal(announces({ connected: false, error: 'gone' }, { connected: true }), true);
+  assert.equal(announces({ connected: true }, { connected: false, error: 'gone' }), true);
+});
+
+test('the first state is always news, however unremarkable', () => {
+  assert.equal(announces(null, { connected: true }), true);
+  assert.equal(announces(null, { connected: false, error: 'gone' }), true);
+});
+
+test('backoff climbs and caps near the board heartbeat', () => {
+  assert.deepEqual([0, 1, 2, 3, 4, 5, 20].map(backoffMs), [1000, 2000, 4000, 8000, 10000, 10000, 10000]);
 });
 
 // -- the request boundary --------------------------------------------------

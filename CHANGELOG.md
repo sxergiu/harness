@@ -1,5 +1,45 @@
 # Changelog
 
+## 0.2.2
+
+A test-only release. Nothing a consumer runs changes, and the reason to take it is that
+0.2.1's Windows leg was red and this is the version where the three-platform claim is true
+again.
+
+### The fixture that was testing the separator instead of the hole
+
+0.2.1 shipped a containment check on the file route — a path is served only if the agent wrote
+it or it resolves inside the agent's own working directory — and four tests over it, written
+as POSIX string literals. `within` compares against the **platform** separator, which is
+correct for production: both its arguments come from `realpathSync`, so on Windows they are
+backslash paths. Against a literal `/repo/harness`, `root + '\'` therefore prefixed nothing,
+and the two cases expecting `true` failed outright. CI had been red on `windows-latest` since
+the commit that introduced them, and green on macOS and Linux throughout.
+
+The third case is the one worth reading. **`a LOOKALIKE sibling is outside` passed on
+Windows** — a comparison that matches nothing also matches nothing it ought to refuse, so the
+single test standing over the prefix hole in a check that serves files to an unauthenticated
+browser was green for a reason with no bearing on the hole. A red test says look at me. That
+one said nothing at all.
+
+The fixtures are built with `resolve`/`join` now, and every assertion was checked under
+`path.win32` as well as `path.posix` rather than only the machine it was written on.
+
+**Production was never affected**, on any platform: the paths `within` compares in a running
+cockpit have always come from `realpathSync` and have always carried the platform's own
+separator. What was broken was the evidence, not the check.
+
+This is the `projects.json` fixture bug of 0.2.0 arriving by the same door, one release later,
+which is the argument for building every path in a fixture rather than typing one.
+
+### Known, and not fixed here
+
+On Windows an **absolute** file reference in an agent's prose is not offered as a link — the
+span-matching helper assembles its comparison with a forward slash. It degrades to no link
+rather than to a wrong one, which is that helper's stated bias, and relative references are
+unaffected. It is cosmetic and it is not a containment matter: the server re-checks every path
+sent to it regardless of what the browser chose to underline.
+
 ## 0.2.1
 
 Three fixes, and the first of them is the reason this is worth taking. A feature rides along
@@ -79,18 +119,6 @@ What it does **not** do, deliberately:
   offered as a link that would silently drop the line.
 - **It does not refresh.** A file is read when you open it and when you ask again. Nothing
   reloads under a reader.
-
-### Fixed
-
-- The containment fixtures above were written as POSIX string literals, and `within` compares
-  against the platform separator — which is right for production, since both its arguments come
-  from `realpathSync` and are native paths. On Windows the two cases expecting `true` therefore
-  failed outright, and the lookalike-sibling case **passed for entirely the wrong reason**: a
-  comparison that matches nothing also matches nothing it ought to refuse. The fixtures are
-  built with `resolve`/`join` now, so the Windows leg measures the hole the test is named after
-  rather than the separator. Production was never affected. This is the `projects.json` fixture
-  bug of 0.2.0 arriving by the same door, which is its own argument for building every path in
-  a fixture rather than typing one.
 
 ### Unchanged
 

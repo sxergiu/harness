@@ -1,5 +1,92 @@
 # Changelog
 
+## 0.2.1
+
+Three fixes, and the first of them is the reason this is worth taking. A feature rides along
+with them, which is why the version is arguable — it is a patch because nothing here changes
+what the cockpit is for, and the fixes are what you are upgrading for.
+
+### An answer nobody gave
+
+**Upgrade for this one.** Answering a Claude Code dialog in words — the "tell Claude what to
+do differently" box, or an `AskUserQuestion` with a *Type something* row — sent the text and
+its Enter in the same call. A selection dialog swallows text wholesale: measured on a live
+prompt, sending a custom answer left the pane **byte-identical**, digits included, because
+only real key presses move that highlight and text arrives as a paste. The Enter riding along
+then committed whichever row happened to be highlighted.
+
+So the agent recorded an option as the human's answer — `→ Spaces`, in the case that found
+this — while what they actually wrote was discarded unseen. That is not a missed answer. It is
+a false one attributed to someone, and it is indistinguishable afterwards from their having
+chosen it.
+
+The blocked panel now types, reads the pane, and only then submits. **Refusing is the whole
+answer available**, not a shortfall: driving words into the right row means finding it, which
+means parsing the prompt, which is the one thing that panel deliberately does not do. So a
+swallowed answer comes back as a refusal, your sentence stays in the box rather than being
+dropped a second time, and the row you need to highlight first is an arrow key away.
+
+The test is that the screen changed **at all**, never that it holds your words — Claude Code
+collapses a paste into `[Pasted text #1 +61 lines]`, so looking for the text would refuse
+sends that in fact landed.
+
+### The log an outage was erasing
+
+A Herdr that is not running fails every reconnect with the same ENOENT, and each one was
+reported. At roughly 104 bytes a line that is a kilobyte a minute into `~/.harness/harness.log`
+— whose 1 MB cap is **not a rotation**. Past it the file records nothing further, so an outage
+of under three hours destroyed the one artifact a bug report is built from, by way of the
+fault it exists to describe.
+
+Identical consecutive faults are now said once. A viewer arriving mid-outage is unaffected:
+the Herdr state is re-sent on every WebSocket connect, so a tab opened during one hears about
+it from that rather than from a broadcast it was not there for. The retry also backs off —
+1s, 2s, 4s, 8s, then 10s — with the ceiling kept near the board's own 3s heartbeat, because a
+longer one would leave the banner saying "disconnected" over a board that is visibly moving.
+
+Three ways the client could end up holding two subscribed sockets are closed with it. By the
+event stream's own rule that **only the newest subscriber is fed**, a leaked second stream
+means the one Herdr is feeding is the one nobody reads — the board then freezes with the
+socket still `connected` and nothing observable saying so.
+
+### One alert per event
+
+Two snapshot passes overlapped when one outlived the heartbeat — the request timeout is 10s
+against a 3s beat — and both then read the same unchanged rows, saw the same transition, and
+announced it: two desktop alerts, two sounds and two Herdr toasts for one agent going blocked.
+The overlapping pass is dropped rather than queued, which costs a beat of freshness and no
+correctness.
+
+### Opening a file the agent named
+
+The feature riding along. A file an agent mentions is now a link — in a tool row, in a code
+span in its prose, in a code span inside a file already open — and it opens beside the feed,
+in the split the fork panel uses, so the output and the file are on screen together.
+
+What it does **not** do, deliberately:
+
+- **It does not serve arbitrary files.** A path the agent wrote is readable wherever it lives,
+  because an agent in a checkout editing `~/.claude/…` is ordinary and its changelist already
+  lists that file; anything else must resolve inside the agent's own working directory. `..`
+  is flattened before anything inspects the path, and the check runs on the resolved **file**
+  rather than its directory, so a symlink under the checkout pointing out of it is refused
+  rather than followed. Case is not folded — on macOS a differently-cased path therefore reads
+  as outside, which is the wrong answer in the safe direction.
+- **It does not decide what is safe to open.** Which code spans become links is a *noise*
+  control and nothing more; the server re-checks everything sent to it, so the cost of a wrong
+  guess there is an underline on a word that is not a file.
+- **It does not open a file at a line.** `board.ts:12` is left as plain text rather than
+  offered as a link that would silently drop the line.
+- **It does not refresh.** A file is read when you open it and when you ask again. Nothing
+  reloads under a reader.
+
+### Unchanged
+
+Everything 0.2.0 said about its own limits still holds, and none of the work above tests them.
+The CI matrix still proves only that the code builds and the invariants hold on three
+platforms — no cockpit has yet talked to a live Herdr off macOS, and every measurement quoted
+above was taken on one. The account switch still handles no credentials.
+
 ## 0.2.0
 
 Two features, and the first of them changes who can install this at all.

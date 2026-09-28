@@ -5,13 +5,25 @@ between two versions is split, branched, reviewed, merged, tagged and handed ove
 
 ## The rule that shapes everything below
 
-**You do not commit, tag, push, or publish. The human does.** CLAUDE.md says it ("The human
-makes every commit") and the cockpit's own agent rules say it again. Every `git` line in this
-file that writes anything is a line for the human to run — your job is to get the tree, the
-notes and the branch into the state where running it is the only thing left.
+**`npm publish` is the human's. Everything else here depends on whether git is delegated to
+you in the checkout you are standing in**, and you must know which before you touch anything.
 
-So the shape of your work in a release is: prepare, verify, hand over the exact command,
-stop. Never run it because it is obviously next.
+Where it is **not** delegated — the default, and what CLAUDE.md means by "The human makes
+every commit" — every `git` line in this file that writes anything is a line for the human to
+run. Your job is to get the tree, the notes and the branch into the state where running it is
+the only thing left: prepare, verify, hand over the exact command, stop.
+
+Where it **is** delegated, you run those lines yourself. What the delegation hands over is the
+typing, and nothing else. It does not hand over **what** to commit, and specifically it is not
+permission to skip the split in §1–3: a grant to push is not a grant to decide a release needs
+no review. 0.3.0 is the whole reason this section reads this way — the grant was real, the
+seven pull requests it still required were not opened, and the release went to `master` as one
+commit of 1,576 lines that nobody could review.
+
+This section used to open `You do not commit, tag, push, or publish`, which was false in a
+delegated checkout. That is worth naming rather than quietly rewriting: **a document whose
+first rule is visibly void reads as advisory all the way down**, and that is the state the
+rest of this file was read in when it was ignored.
 
 ## What a release is here
 

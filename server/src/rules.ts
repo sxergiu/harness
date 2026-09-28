@@ -16,6 +16,9 @@ import { dirname, join } from 'node:path';
 /** The human's own version of `RULES`, when they have written one. */
 const OVERRIDE = join(homedir(), '.harness', 'rules.md');
 
+/** The model the cockpit starts agents on, when the human has picked one. */
+const MODEL = join(homedir(), '.harness', 'model');
+
 const RULES = `You are running in a Herdr pane, supervised through a browser cockpit that
 shows your status, your current work, and a diff of the files you change. These
 rules apply to everything you do here.
@@ -102,9 +105,33 @@ const flatten = (prompt: string): string => prompt.replace(/\s*\n\s*/g, ' ').tri
  * agent will run in (`projects.ts`). It is a required parameter rather than one
  * defaulting to `false`, because a default argument is how a fail-closed rule
  * quietly becomes something nobody reads at the call site.
+ *
+ * The model is the caller's for a narrower reason: it has to RECORD what the
+ * start passed, against the pane, or the context meter is left guessing which
+ * agents carried the flag (`startedBy` in `board.ts`). Reading `modelDefault`
+ * here as well would be two reads of one file that are free to disagree, and
+ * the pane would then be remembered as running something it was never given.
+ * Still read per start — by the route, one line up.
  */
-export function startArgs(gitDelegated: boolean): string[] {
-  return ['--append-system-prompt', flatten(rulesFor(rulesText(), gitDelegated))];
+export function startArgs(gitDelegated: boolean, alias: string | null): string[] {
+  return argsFor(rulesFor(rulesText(), gitDelegated), alias);
+}
+
+/**
+ * Split out pure for `rulesFor`'s reason: with no choice stored the flag must be
+ * ABSENT rather than carrying a name of ours, and an agent wrongly started on
+ * one looks identical on every screen to one started right.
+ *
+ * There is no `--effort` twin. The cockpit held one only to defend its own
+ * starts from a per-agent `/effort`, which no longer moves anything (`hold` in
+ * `claudeFiles.ts`), so the level agents start at is whatever the human's own
+ * `~/.claude/settings.json` says — the same as an agent started by hand.
+ */
+export function argsFor(prompt: string, model: string | null): string[] {
+  return [
+    '--append-system-prompt', flatten(prompt),
+    ...(model === null ? [] : ['--model', model]),
+  ];
 }
 
 /**
@@ -155,6 +182,47 @@ export function setRules(text: string): void {
   }
   mkdirSync(dirname(OVERRIDE), { recursive: true });
   writeFileSync(OVERRIDE, text);
+}
+
+/**
+ * Which model agents the cockpit starts are run on, read per start for the
+ * rules' contract and never cached.
+ *
+ * Absent or blank is NO FLAG AT ALL rather than a default of ours — the human's
+ * own `~/.claude/settings.json` decides then, which is the state every agent was
+ * started in before this existed and the one a `claude` upgrade keeps working.
+ *
+ * Whatever is stored goes through unread: a full model id is something `claude`
+ * accepts and this cannot enumerate, and one it does not accept fails the start
+ * loudly in the CLI's own words (invariant 19). The newline is the exception —
+ * Herdr fails the whole `agent.start` on one with an encoding error that names
+ * nothing about models (invariant 11), so a value carrying one is no choice.
+ */
+export function modelDefault(): string | null {
+  try {
+    return modelFrom(readFileSync(MODEL, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+/** Split out pure so both refusals above can be pinned without a home to read. */
+export function modelFrom(text: string): string | null {
+  const alias = text.trim();
+  return alias === '' || alias.includes('\n') ? null : alias;
+}
+
+/** Blank removes the file, the same reset — and for the same reason — as `setRules`. */
+export function setModelDefault(alias: string): void {
+  const stored = modelFrom(alias);
+  if (stored === null) {
+    try {
+      unlinkSync(MODEL);
+    } catch { /* already gone, which is the state being asked for */ }
+    return;
+  }
+  mkdirSync(dirname(MODEL), { recursive: true });
+  writeFileSync(MODEL, stored);
 }
 
 /**

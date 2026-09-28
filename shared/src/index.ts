@@ -27,6 +27,34 @@ export const STATUS_ORDER: AgentStatus[] = ['blocked', 'done', 'working', 'idle'
 export const AGENT_SHADES = ['indigo', 'teal', 'lime', 'rose', 'purple'] as const;
 export type AgentShade = typeof AGENT_SHADES[number];
 
+/**
+ * What the cockpit offers to run an agent on — the aliases `claude --model`
+ * takes, `[1m]` included, which is the only way the wider context window is ever
+ * asked for.
+ *
+ * These are REQUESTS, not entitlements. Both 1M variants and `fable` are gated
+ * on the account, and one it lacks makes `claude` print "It may not exist or you
+ * may not have access to it" and exit — at start that is invariant 19's failure,
+ * reported to the browser in the CLI's own words.
+ */
+export const MODELS = ['opus', 'opus[1m]', 'sonnet', 'sonnet[1m]', 'haiku', 'fable'] as const;
+export type ModelAlias = typeof MODELS[number];
+
+/**
+ * How hard the model is asked to think, the five levels `claude --effort` takes.
+ *
+ * Unlike an alias, a level is not honoured as asked. Claude Code CAPS it at the
+ * model's own ceiling and writes the capped value, and a model with no effort at
+ * all — measured on `claude-haiku-4-5` — records none. So what an agent runs at
+ * is only ever read back off its transcript, never from what was chosen.
+ *
+ * `max` is the one that does not persist: `/effort max` sets the session and
+ * writes nothing to `~/.claude/settings.json`, where the other four are saved as
+ * the default for new sessions.
+ */
+export const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
+export type EffortLevel = typeof EFFORTS[number];
+
 export interface WorkspaceRow {
   id: string;
   /** Herdr's workspace label, usually the repo name. */
@@ -118,6 +146,20 @@ export interface AgentRow {
    * says anything about now.
    */
   error: string | null;
+  /**
+   * What its newest request actually ran on, as the transcript records it:
+   * `claude-opus-5`. Never an alias — the transcript says the same thing for a
+   * 200k session and a 1M one, which is why `context.window` is inferred
+   * separately and why this is what that inference is checked against.
+   */
+  model: string | null;
+  /**
+   * What that same request ran at, off the same entry as `model` so the two
+   * always describe one request. Null is a real answer and not just an unread
+   * one: a model with no effort level records none, and reporting the level of
+   * an older request beside a newer model would be a claim about neither.
+   */
+  effort: string | null;
   /**
    * How much of the context window this session is holding, measured from the
    * last request its transcript recorded. Null until the agent has made one —
@@ -448,8 +490,34 @@ export const sameAccount = (a: AccountKey, b: AccountKey): boolean =>
  * least one real account, and two plans can repeat. `label` is the only
  * disambiguator that is guaranteed to work, because a human chose it.
  */
+/**
+ * The last limits reading taken while an account was live, and when.
+ *
+ * ON THE ACCOUNT ROW rather than in a store of its own. `sameAccount` is the
+ * key, and a second structure keyed separately is a second place to key on the
+ * address alone — which is exactly the failure that once held the known list at
+ * one row and left nothing to switch to.
+ *
+ * `resets` deliberately does not come across, and the type is what enforces it.
+ * That field is verbatim prose with no date in it — "3:20am (Europe/Bucharest)"
+ * — so a reading three days old renders a reset time that reads as upcoming and
+ * is long past, with nothing in the string able to tell you otherwise. A
+ * percentage ages honestly next to `at`; a reset time does not age at all.
+ */
+export interface AccountUsage {
+  limits: Array<Pick<UsageLimit, 'label' | 'percent'>>;
+  /** ISO, like `stateSince`, so the browser's own `since()` renders the age. */
+  at: string;
+}
+
 export interface KnownAccount extends AccountIdentity {
   label: string | null;
+  /**
+   * Null until this account has been live for a reading. Never refreshed for an
+   * account that is not live: that would mean switching to it, and nothing here
+   * switches accounts on its own.
+   */
+  usage: AccountUsage | null;
 }
 
 /**
@@ -530,10 +598,33 @@ export interface SettingsView {
     /** False once the human has written their own — the reset has something to undo. */
     isDefault: boolean;
   };
+  /**
+   * What agents the cockpit starts are run on. Null is no choice at all rather
+   * than a name of ours: no `--model` is passed, so the human's own
+   * `~/.claude/settings.json` decides, exactly as it does for an agent started
+   * by hand.
+   */
+  model: {
+    alias: string | null;
+    /**
+     * The level agents start at, read from `~/.claude/settings.json` rather
+     * than held here: no `--effort` is passed, so that file is the whole of the
+     * answer. Shown and not settable, since setting it would be writing a file
+     * of Claude Code's to mean something it already means.
+     */
+    effort: string | null;
+  };
   /** Only the checkouts git has been delegated in — a revoke removes the entry. */
   checkouts: Array<{ path: string; gitDelegated: boolean }>;
   claudeFiles: ClaudeFileState[];
   herdr: HerdrRuleState;
+  /**
+   * Whether the cockpit answers Claude in Chrome's site-permission dialog with
+   * "allow" itself. Off unless the human turns it on, and useless without the
+   * detection rule above — an undetected dialog reads `idle`, so there is no
+   * blocked agent for this to answer.
+   */
+  chromeAutoAccept: boolean;
 }
 
 // ---------------------------------------------------------------------------

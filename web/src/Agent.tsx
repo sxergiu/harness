@@ -1,12 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { AgentRow, AsideView, BlockedView } from '@harness/shared';
+import {
+  EFFORTS, MODELS,
+  type AgentRow, type AsideView, type BlockedView, type EffortLevel, type ModelAlias,
+} from '@harness/shared';
 import { DiffTab } from './Diff.js';
 import { EntryRow, Feed } from './Feed.js';
 import type { FileViewer } from './fileRef.js';
 import { FileView } from './FileView.js';
 import { ContextMeter, Spinner, StatusDot, Working } from './Status.js';
 import { SubagentsTab } from './Subagents.js';
-import { since, useApi } from './useHarness.js';
+import { modelLabel, modelName, since, useApi } from './useHarness.js';
 
 /**
  * The one-line height of the prompt field in px: 1px border + `py-1` + one
@@ -149,6 +152,106 @@ function CommandField(
       placeholder={placeholder}
       className="min-w-0 flex-1 resize-y rounded border border-neutral-800 bg-neutral-900 px-2 py-1 text-neutral-200"
     />
+  );
+}
+
+/**
+ * What this agent is running on, and the aliases it can be asked to run on
+ * instead. A fact you can also change, so it sits with the facts on the left of
+ * the header rather than among the verbs on the right.
+ *
+ * **The switch is per-agent, and what it costs to make it so is one line of
+ * warning.** `/model <alias>` sets this session AND writes the alias to
+ * `~/.claude/settings.json` as the default for new sessions everywhere — read
+ * out of the CLI: `Set model to X and saved as your default for new sessions`.
+ * Session-only exists behind the interactive picker's own key, which a typed
+ * command cannot press. So the server records what that file said and puts it
+ * back once the write lands (`hold`), which leaves a window — a few seconds at
+ * an idle agent, the rest of the turn at a busy one — where the file does hold
+ * this alias and an agent started by hand would inherit it.
+ *
+ * Nothing is read back afterwards. A cross-family switch on an agent that has
+ * already worked raises Claude Code's own `Switch model?` confirm, which the
+ * agent shows and the human answers in the pane or the blocked panel.
+ */
+function ModelPicker(
+  { agent, onPick, onEffort }: {
+    agent: AgentRow;
+    onPick: (alias: ModelAlias) => void;
+    onEffort: (level: EffortLevel) => void;
+  },
+): React.ReactElement | null {
+  const [open, setOpen] = useState(false);
+  // An agent that has not answered yet has no model to report, and a pruned
+  // transcript never will — but either can still be asked to switch, so the
+  // control stays and only its label goes unknown.
+  const name = agent.model ? modelName(agent.model) : 'model';
+  // Read off the same request as the model, so the pair never describes two.
+  // Absent is a state of its own and reads as one: a model with no effort level
+  // shows the name alone rather than a placeholder standing in for a fact.
+  const label = agent.effort ? `${name} ·${agent.effort}` : name;
+
+  // A closed agent still ran on something; it just cannot be asked to change.
+  if (!agent.live) {
+    return agent.model
+      ? <span className="shrink-0 text-neutral-600">{label}</span>
+      : null;
+  }
+
+  return (
+    <div className="relative shrink-0">
+      <button
+        onClick={() => setOpen(!open)}
+        className={open ? 'text-neutral-200' : 'text-neutral-600 hover:text-neutral-300'}
+        title="What this agent's last request ran on, and what it ran at. The transcript cannot say whether the window is 200k or 1M, and a model with no effort level records none."
+      >
+        {label}
+      </button>
+      {open && (
+        <div className="absolute left-0 top-6 z-10 w-80 rounded border border-neutral-800 bg-neutral-900 p-2">
+          <p className="mb-1.5 text-amber-400">
+            Applies to this agent. Claude Code saves either to
+            ~/.claude/settings.json as your default for new sessions, so the
+            cockpit puts that file back afterwards — until it does, an agent you
+            start by hand picks this up.
+          </p>
+          {MODELS.map((m) => (
+            <button
+              key={m}
+              onClick={() => { setOpen(false); onPick(m); }}
+              className="block w-full rounded px-1 py-0.5 text-left text-neutral-300 hover:bg-neutral-800"
+            >
+              {modelLabel(m)}
+            </button>
+          ))}
+          {/* Offered unfiltered because entitlement is the account's and this
+              cannot enumerate it — the same reason the settings default passes
+              whatever it is given straight through. */}
+          <p className="mt-1 text-neutral-600">
+            An alias is a request. One this account has no access to is refused in the
+            pane, in the CLI’s own words.
+          </p>
+          {/* One popover rather than a second control in the header strip: the
+              level is a property of how the model runs, not a fact beside it. */}
+          <div className="mt-1.5 flex items-center gap-1 border-t border-neutral-800 pt-1.5">
+            <span className="px-1 text-neutral-600">effort</span>
+            {EFFORTS.map((e) => (
+              <button
+                key={e}
+                onClick={() => { setOpen(false); onEffort(e); }}
+                className={`rounded px-1 py-0.5 ${
+                  agent.effort === e
+                    ? 'bg-neutral-700 text-neutral-100'
+                    : 'text-neutral-300 hover:bg-neutral-800'
+                }`}
+              >
+                {e}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -405,6 +508,11 @@ export function AgentView(
         <span className="text-neutral-600">{since(agent.stateSince)}</span>
         {/* Room here for both numbers; the board row only has room for the share. */}
         <ContextMeter context={agent.context} tokens />
+        <ModelPicker
+          agent={agent}
+          onPick={(alias) => void call(`/api/agents/${agent.paneId}/model`, { alias })}
+          onEffort={(level) => void call(`/api/agents/${agent.paneId}/effort`, { level })}
+        />
         {busy && <Spinner />}
 
         <div className="ml-auto flex gap-2">

@@ -193,7 +193,8 @@ session:
 - **CHECKOUTS** — every checkout git has been delegated in.
 - **CLAUDE FILES** — whether `planner.md`, `feature.md` and `investigate.md` are installed,
   missing, or differ from what ships. Install from here or with `harness init`.
-- **HERDR** — the blocked-detection rule below.
+- **HERDR** — the blocked-detection rule below, and whether the cockpit answers the Claude
+  in Chrome dialog for you.
 
 ### Blocked detection
 
@@ -214,6 +215,23 @@ blocked panel.
 
 An override it did not write is never replaced without `--force` — yours may carry rules of
 your own. `herdr agent explain <pane> --verbose` reports which manifest is actually in force.
+
+### Answering that dialog for you
+
+Under the same section is **answer it with "allow" automatically**, off until you turn it
+on. With it on, an agent that stops at the Claude in Chrome dialog is allowed through
+without waiting for you — the session-wide row where that is offered, so it stops asking
+about that site, and the one-off `Allow` where it is not.
+
+> This is the **only** key the cockpit ever presses on its own. Every other permission
+> prompt — Bash, edits, anything else — still waits for you in the blocked panel, and
+> turning this on says nothing about them. It reads the digit off the dialog itself rather
+> than pressing a fixed one, because the list is `Allow / Deny` when the session-wide offer
+> is missing, and there `2` means **deny**.
+
+It is stored as `~/.harness/chrome-autoaccept` (the file's existence is the setting) and
+needs the rule above: without detection the agent reads idle, so there is nothing to
+answer. Every press is recorded in `~/.harness/harness.log`.
 
 ### Names
 

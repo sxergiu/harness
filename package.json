@@ -1,6 +1,6 @@
 {
   "name": "@sxergiu/harness",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "description": "A local browser cockpit for the coding agents running in Herdr",
   "keywords": [
     "herdr",
@@ -30,6 +30,7 @@
   "files": [
     "dist",
     "CHANGELOG.md",
+    "releases",
     "LICENSE",
     "README.md",
     "USAGE.md"
@@ -52,7 +53,7 @@
     "build:assets": "node -e \"require('node:fs').cpSync('server/src/assets','dist/assets',{recursive:true})\"",
     "lint": "oxlint server/src web/src shared/src --deny-warnings",
     "start": "node dist/server.js",
-    "test": "node --import tsx --test server/src/invariants.test.ts",
+    "test": "node --import tsx --test server/src/invariants.test.ts server/src/chrome.test.ts",
     "prepublishOnly": "npm run lint && npm run typecheck && npm test && npm run build",
     "stop": "node dist/server.js stop",
     "typecheck": "tsc --noEmit -p tsconfig.json"

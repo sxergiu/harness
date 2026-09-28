@@ -2,7 +2,8 @@
 
 Read this first, then [SPEC.md](SPEC.md) for the full design and the reasoning behind
 every product decision. [README.md](README.md) states what this does and does not
-guarantee; [USAGE.md](USAGE.md) is how a human runs it.
+guarantee; [USAGE.md](USAGE.md) is how a human runs it;
+[RELEASING.md](RELEASING.md) is how a version gets out.
 
 ## What this is
 
@@ -228,6 +229,35 @@ Every one was established by probing the live system, and most fail *silently* i
     beside it. The sentinel comment answers only "is this ours to regenerate" — an override
     we did not write is never replaced without `--force`, which is what protects the
     hand-added rules someone may have in theirs.
+    **`chrome.ts` ANSWERS what that rule makes visible, and THE DIGIT IS READ OFF THE
+    SCREEN.** For a human who has decided a browsing agent may browse, the panel appearing
+    is the whole cost — the agent stops until they press a key they were always going to
+    press. The offer to press it for them is `~/.harness/chrome-autoaccept` (existence is
+    the setting, read per dialog, off unless turned on), and it is the only key this
+    cockpit sends that nobody pressed.
+    Which key cannot be a constant, and that is the one thing here that fails silently.
+    Read out of the v2.1.220 bundle: the option list is built as `Allow`, then
+    `Allow all actions on <host> for this session` ONLY where that offer stands
+    (`showAlwaysAllow && !isAskCappedByOrg && !!chrome`), then `Deny (esc)` — so the same
+    `2` that grants the host for the session on the long screen IS DENY on the short one.
+    A fixed keystroke would therefore refuse about as often as it allowed, and refuse
+    invisibly: the agent carries on with a no that reads, in the transcript and on the
+    board, exactly like the human's. So the digit is taken from the row the dialog itself
+    printed, allow-all preferred where it is offered because it settles the host and stops
+    the asking.
+    **It reads the LIVE REGION, which is `cropPanel`'s cut and not a second one of ours.**
+    A pane read carries the scrollback, where a dialog answered minutes ago is still
+    sitting; by then the agent is blocked at something else, and that stale digit would
+    answer the new prompt in the human's name — `sendText`'s false answer by the other
+    door. Sharing the region with Herdr's rule is also what keeps the two from disagreeing:
+    a dialog the crop cannot see is one Herdr never called `blocked`, so there is nothing
+    to answer. The send is optimistic like the blocked panel's keys, but nobody is watching
+    it, so the screen answered is remembered per pane — without that, a key that does not
+    take is re-sent every heartbeat forever.
+    Verified live on the DECLINE path only: six real agent screens, the Herdr-blocked one
+    among them, all answered null. The allow path rests on the bundle above and on the
+    measured rule that matched the real dialog; a dialog Claude Code restyles goes QUIET
+    rather than wrong, and the panel is still there for the human.
 18. **A `--fork-session` copies the whole conversation and KEEPS EVERY ENTRY'S uuid.**
     Measured: forking a live session left the parent's transcript byte-identical (md5
     unchanged), and the fork's own transcript held the parent's 61 entries rewritten under a
@@ -334,13 +364,19 @@ server/src/
   board.ts            THE JOIN. rows, stateSince, contention, notifications
   diff.ts             per-file diffs from tool results
   history.ts          RECENT — a flat JSON cache of closed agents
-  rules.ts            what every started agent is told. Highest-leverage file here.
-                      `~/.harness/rules.md` overrides it wholesale; read per start
+  rules.ts            what every started agent is told and which model it runs on.
+                      `~/.harness/rules.md` overrides the rules wholesale and
+                      `~/.harness/model` is the `--model`; both read per start
   log.ts              what a bug report attaches. Always on, file only, capped
   projects.ts         what the human has decided about a CHECKOUT, keyed on its path
-  claudeFiles.ts      the planner subagent and the two commands, `harness init`, and
-                      the trust grant for the one folder that is ours
+  claudeFiles.ts      every file of Claude Code's OWN that we touch: the planner
+                      subagent and the two commands, `harness init`, the trust
+                      grant for the one folder that is ours, and settings.json —
+                      read for the model in force, written only to put back what
+                      a per-agent switch overwrote
   herdrRules.ts       merges our one detection rule into Herdr's current manifest
+  chrome.ts           answering that dialog with "allow" when the human has said
+                      it may. The only key this cockpit presses on its own
   aside.ts            side conversations forked off an agent's session
   notify.ts           osascript + afplay, plus a Herdr toast
   instance.ts         the single-instance lock, and where to point the browser
@@ -348,7 +384,9 @@ server/src/
   usage.ts            the account's limit bars, read through an agent of our own
   account.ts          which Claude account is being spent, and switching to another.
                       Drives the `claude auth` commands; handles no credentials
-  invariants.test.ts  the invariants that fail silently, over fixtures only
+  invariants.test.ts  the invariants that fail silently, over fixtures only.
+                      Also the guard that every test file is named in `npm test`
+  chrome.test.ts      which digit answers that dialog, and answering it once
 web/src/
   App.tsx             the one column: collapsible spaces, their agents, inline edits
   Agent.tsx           header, feed|diff tabs, actions, blocked panel
@@ -478,10 +516,20 @@ foot of the board because that is where the bars that prompt it are.
   half-finished in a browser, and closing it takes the way back with it. `pending` is in
   memory only and legitimately empty after a restart, like `stateSince` — which costs
   exactly this: a harness restarted inside the few minutes a login is open forgets the
-  pane, leaving it on screen in Herdr for the human to finish or close while the next
-  switch opens a second one beside it. Adoption by name, the way `usage.ts` finds its agent
-  again, is not available here — that works on an AGENT name and this pane hosts a shell.
-  `pane.rename` sets a `label` that does not appear on a pane in `herdr pane list` at all.
+  pane, leaving it on screen in Herdr for the human to finish or close. Adoption by name,
+  the way `usage.ts` finds its agent again, is not available here — that works on an AGENT
+  name and this pane hosts a shell; `pane.rename` sets a `label` that does not appear on a
+  pane in `herdr pane list` at all. It is not adopted for a second reason anyway: `settle`
+  decides on `from` and `sawLoggedOut`, neither of which survives the restart either, so an
+  adopted login could never be finished and would sit pending forever.
+  **So it is CLEANED UP rather than adopted, and only at the next switch** —
+  `closeStrayLogins`, identified by CWD rather than by name: it is a bare shell in
+  `~/.harness`, the one directory that is ours, and the usage agent sharing that directory
+  always carries an `agent`. Only from `switchTo`, deliberately not at startup or shutdown:
+  a login may be half-finished in a browser, where closing its pane takes the way back with
+  it, and a restart-time sweep would do exactly what `shutdown` is careful not to. Asking
+  for a new switch is the one signal that the old pane is spent — which is also what stops
+  the second pane appearing beside the first.
 - **AN ACCOUNT IS `email` AND `orgId`, NEVER THE EMAIL ALONE.** One address holds two
   accounts with two subscriptions whenever somebody has a personal Pro and a seat in an
   organization — the live machine has exactly that — and keying the known list on the
@@ -525,16 +573,46 @@ foot of the board because that is where the bars that prompt it are.
   line inside the collapsible half would not be there on load.
 - **Nothing here touches an agent**, and the panel says so without claiming to know what a
   switch does to one mid-request: "Running agents are not touched, and may fail their next
-  request." The limit bars still read the live account only — there is no per-account usage
-  cache — and nothing ever switches on its own, however exhausted a limit is.
+  request." Nothing ever switches on its own, however exhausted a limit is.
+- **A READING IS HUNG ON THE ACCOUNT IT WAS TAKEN FROM**, so switching away no longer blanks
+  what you knew about the other one — which was the whole friction of running two
+  subscriptions. The bars themselves are still a live reading and never come from the cache.
+  It lives on the `KnownAccount` row in `accounts.json` rather than in a store of its own,
+  because `sameAccount` is the key and a second structure keyed separately is a second place
+  to key on the address alone. `capture` REBUILDS that row and runs every two seconds while a
+  login is open, so every field the CLI cannot report has to be carried across it — `rowFor`
+  is that line, split out pure because the failure is invisible: the row still renders, just
+  without the thing that was erased. `recordUsage` deliberately does not route through
+  `capture`, whose head short-circuit would drop the write in the common case and in silence.
+  **`resets` is not cached, and the type is what refuses it**: it is prose with no date in it,
+  so a three-day-old reading would render a reset time that reads as upcoming and is long
+  past. A percentage ages honestly beside `at`; a reset time does not age at all. There is no
+  refresh on a cached row and there cannot be — these numbers are read by driving `/usage` in
+  an agent, which only answers for the account signed in.
 
 ## Conventions
 
 - **Transcripts are the source of truth**; SQLite is gone and `history.ts` is only a cache.
 - **A space's directory is ours, and in memory only.** Herdr has no such field, so `board.ts`
-  reads it off the space's panes and keeps hand-set overrides in a `Map`. Do not persist it:
-  workspace ids are per-session and Herdr reuses them, so a remembered dir could start an
-  agent in the wrong repo. It is why starting an agent needs no form.
+  SEEDS one from the space's panes the first time it sees the space and pins it in a `Map`
+  from then on; nothing but the human moves it afterwards. It is why starting an agent needs
+  no form. Do not persist it: workspace ids are per-session and Herdr reuses them, so a
+  remembered dir could start an agent in the wrong repo — which is also why a space that
+  leaves the snapshot drops its entry, exactly as the pane-keyed maps do.
+  **Re-reading it every resync is what this replaced, and it was a live bug.** A space
+  labelled `e-avize-site` held two agents in `repos/e-avize`, one agent and one forgotten
+  shell in `repos/claude-harness`; the mode over every pane came out 2–2, Herdr's listing
+  order broke the tie for the wrong repo, and the agent started there made it 3–2 and pinned
+  the space to the wrong root for good — the vote reinforcing its own mistake, with nothing
+  on screen saying so but a path in the space header.
+  So `seedCwd` reads AGENT panes and falls back to bare shells only when the space has none:
+  a shell is as often a window somebody opened elsewhere and forgot as it is the space's
+  work, where an agent was started to do what the space exists for. Instruments never vote —
+  the usage agent runs in `~/.harness`, which is nobody's repo, and an aside runs in its
+  parent's cwd, a second voice for a directory that already has one. **A tie seeds nothing**,
+  because the seed is kept for the life of the space: a coin flip is not a wrong dir for one
+  heartbeat but a wrong dir until somebody notices, and the space simply has no dir until
+  the human types one — which `POST /api/workspaces/:id/agents` already refuses without.
 - **A row's shade and its locked slot are ours, and in memory only** — the same reasoning as
   the directory above, keyed on a pane id rather than a workspace id. Both are pruned when
   the pane goes, beside `forked`, and both are legitimately empty after a restart like
@@ -618,6 +696,65 @@ foot of the board because that is where the bars that prompt it are.
   comes from the model in `~/.claude/settings.json` (`[1m]` → 1M, the same file these agents
   load) and widens if any request in the session ever exceeded it. Verified against Claude
   Code's own status line: 83,344/1M read 8%, and the pane footer said `Context: 8% used`.
+  **A TYPED `/model` IS NOT PER-AGENT, and the cockpit makes it one by putting the file
+  back.** Claude Code sets the session and saves the alias to `~/.claude/settings.json` as
+  the default for new sessions — read out of the v2.1.220 bundle, where both the typed
+  `/model` and the typed `/effort` reach the user-settings writer whenever the session is
+  interactive (`Pcn(…, !t.options.isNonInteractiveSession, …)` → `Hcn` → `_i("userSettings",
+  {model})`, and `RBo(…, !t.options.isNonInteractiveSession)` → `vqr(o,true)` →
+  `{effortLevel}`), which a Herdr pane always is. The CLI itself SEPARATES the two and only
+  in the TUI: the picker's `onSelect` sets the session and says `for this session only`,
+  while `onSetDefault` is a different key. A typed command cannot press it.
+  So `hold` in `claudeFiles.ts` records what the key said, the switch is sent, and the key
+  is put back once the write lands. **Keyed on the SETTING, never on the pane**: two agents
+  switched inside one window are two writes to one key, and the second must restore what the
+  FIRST one found — restoring what the second one saw leaves the first agent's alias standing
+  as the machine default, which is the bug arrived at from inside.
+  **Settled on the board's heartbeat, and it may not become a timer.** A `/model` at a busy
+  agent queues behind the whole turn, so the write lands at a time nothing can predict;
+  restoring after a fixed delay fires BEFORE it and leaves the file moved anyway, which is
+  indistinguishable on screen from not trying. The heartbeat already reads this file, so
+  there is nothing to cancel at shutdown or when a second switch arrives, and `settleAction`
+  writes only once the file actually holds what was asked for — a value that is neither the
+  old one nor the new one is the human editing their own settings, and is waited out and then
+  abandoned rather than overwritten. The hold is in memory, so a harness restarted inside the
+  window leaves the default moved: that is what happened before any of this existed.
+  What this does NOT close is the window itself. Between the CLI's write and the restore the
+  file does hold the new alias, so an agent started by hand in those seconds inherits it, and
+  the header's warning is now about exactly that and nothing more.
+  **`max` takes no hold** — `Zje('max')` returns undefined in that bundle so `vqr` writes
+  nothing, and a hold would wait out its whole expiry for a write that never comes. The level
+  is also CAPPED per model and a model may have none at all: measured, real
+  `claude-haiku-4-5` requests record no `effort` in the transcript, which is why `effortOf`
+  answers off the entry `modelOf` already picked rather than scanning back for one that has
+  a level.
+  **THE PINNING IS GONE, and `~/.harness/effort` with it.** `pinModelDefault`,
+  `pinEffortDefault` and `pinFor` existed only to defend the cockpit's own starts from that
+  leak — they made a per-agent action WRITE the global default, covered nothing started by
+  hand, and are the wrong shape once the leak is fixed at its source. There is no `--effort`
+  flag now either: that file had no other writer, so what agents start at is whatever the
+  human's settings say, which is stable again. The settings screen shows that level read-only
+  and names where it comes from.
+  **Two aliases can name it now, and the FAMILY is what decides between them.** The cockpit
+  passes its own `--model` (`~/.harness/model`) to agents it starts, and the settings file
+  names the rest, so each alias is a claim about every agent that is true of some of them.
+  `windowFor` grants `[1m]` only when the transcript's model is of that family —
+  `claude-sonnet-5` never gets opus's 1M. Refusing costs the 200k read, which is the safe
+  one: it over-reports rather than hiding that a session is nearly full, and the peak-widening
+  rescues it at 200k either way.
+  **THEY ARE RESOLVED BY PRECEDENCE, NEVER BY TAKING THE WIDER**, and taking the wider was
+  this same bug one level up. `~/.harness/model` is true of agents WE start and says nothing
+  about one started by hand, so reading it off the file and applying it to every row granted
+  1M to agents that never carried the flag — the unsafe direction. `contextOf` asks, in order,
+  what the pane was switched to (`switchedTo`), what we started it with (`startedBy`, recorded
+  at the launch that passed the flag), and only then the settings file, which is all there is
+  to say about an agent somebody started themselves. Each is a fact about something narrower
+  than the last, and every one still has to survive the family check — a known alias is not
+  privileged, or the cockpit's own `--model` becomes a way to widen any window on the board.
+  Both maps are in memory and dropped with the pane, for the shade's reason; after a restart
+  the meter falls back to the default and the peak-widening recovers the rest. `startArgs`
+  therefore takes the alias from its caller rather than reading the file itself: two reads are
+  free to disagree, and the pane would then be remembered as running what it was never given.
 - **The Tailwind ramp IS the theme, and light mode is one CSS block.** Every colour class
   resolves to `var(--color-*)` — verified in the compiled output, including opacity
   modifiers, which become `color-mix(in oklab, var(--color-teal-700) 35%, …)` inside an
@@ -920,7 +1057,11 @@ green, and each of which fails in a different way:
   `node -e` over `fs.cpSync`, and `npm test` names `invariants.test.ts` outright — the glob
   worked only because a POSIX shell expanded it before node saw it, and node's own glob
   support arrived after the version `engines` declares. A second test file must be added to
-  that script by hand; that is the cost of the floor staying at 20.
+  that script by hand; that is the cost of the floor staying at 20, and **a test in
+  `invariants.test.ts` fails until it is** — a file nobody runs reports nothing, and reporting
+  nothing is indistinguishable from passing. Handing node the DIRECTORY instead is worse than
+  either: measured, `--test server/src` ran the whole directory as ONE opaque case and
+  answered `tests 1, pass 1`, green and meaningless.
 - **Windows Herdr listens on a NAMED PIPE**, so `~/.config/herdr/herdr.sock` is not merely
   in the wrong place there but the wrong kind of thing. `socketPath()` asks the binary —
   `herdr status server --json` reports the endpoint it would use whether or not a server is
@@ -944,5 +1085,6 @@ green, and each of which fails in a different way:
 Remaining before it is something a stranger can rely on: the settings screen has never been
 rendered in a browser.
 
-The repo is committed and pushed to `github.com/sxergiu/harness`, which is private. The
-human makes every commit.
+The repo is committed and pushed to `github.com/sxergiu/harness`, which is now public — so
+the three links the package ships resolve for everyone rather than only for the owner, whose
+session resolved them either way. The human makes every commit.

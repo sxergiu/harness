@@ -1,10 +1,11 @@
 import { execFile } from 'node:child_process';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import {
-  type AccountIdentity, type AccountKey, type AccountView, type KnownAccount, sameAccount,
+  type AccountIdentity, type AccountKey, type AccountUsage, type AccountView,
+  type KnownAccount, sameAccount, type UsageLimit,
 } from '@harness/shared';
 import { trustFolder } from './claudeFiles.js';
 import type { Herdr } from './herdr.js';
@@ -172,6 +173,23 @@ class Accounts {
   }
 
   /**
+   * Hangs a limits reading on the account it was taken from.
+   *
+   * Mutates the row in place and saves, exactly as `setLabel` does, and
+   * deliberately NOT by routing through `capture`: the live account is almost
+   * always at the head of the list, where `capture` short-circuits and returns
+   * before writing anything — so a write sent that way would be dropped in the
+   * common case and in silence.
+   */
+  recordUsage(key: AccountKey, usage: AccountUsage): boolean {
+    const row = this.find(key);
+    if (!row) return false;
+    row.usage = usage;
+    this.save();
+    return true;
+  }
+
+  /**
    * Record whoever is signed in, newest first. This is the whole of enrolment:
    * an account joins the list by being used, so the one you are on is there
    * without anyone adding it, and a new one joins the first time you log into
@@ -179,11 +197,7 @@ class Accounts {
    * it — the file is rewritten in it.
    */
   capture(identity: AccountIdentity): void {
-    // **The label is carried over.** It is the one field `claude auth status`
-    // cannot report, and a capture runs on every read of the panel — every two
-    // seconds while a login is open — so taking the identity wholesale would
-    // erase a rename within a tick of making it.
-    const row: KnownAccount = { ...identity, label: this.find(identity)?.label ?? null };
+    const row = rowFor(identity, this.find(identity));
 
     // Called that often, an account already at the head is not rewritten. The
     // label is not compared: `row` took it from this same account, so it would
@@ -209,11 +223,29 @@ class Accounts {
 }
 
 /**
+ * A fresh row for an identity, keeping everything the identity cannot say.
+ *
+ * **EVERY FIELD `claude auth status` CANNOT REPORT IS CARRIED OVER**, and the
+ * list grows: `capture` runs on every read of the panel — every two seconds
+ * while a login is open — so building the row from the identity wholesale
+ * erases whatever the cockpit knows that the CLI does not, within a tick of
+ * learning it. For `label` that is a rename vanishing as it is made; for
+ * `usage` it is a limits reading vanishing before it can be looked at.
+ *
+ * Split out pure so both can be pinned, because neither failure is visible: the
+ * row still renders, just without the thing that was erased. Anything added to
+ * `KnownAccount` beyond `AccountIdentity` belongs here the day it is added.
+ */
+export function rowFor(identity: AccountIdentity, prior: KnownAccount | undefined): KnownAccount {
+  return { ...identity, label: prior?.label ?? null, usage: prior?.usage ?? null };
+}
+
+/**
  * `email` is the only field a row cannot do without: it is the key, the only
  * thing the row renders, and the only thing `--email` can be given. A row
  * without one is an entry that cannot be shown or switched to.
  */
-function parse(text: string): KnownAccount[] {
+export function parse(text: string): KnownAccount[] {
   const doc = JSON.parse(text) as { version?: unknown; accounts?: unknown };
   if (typeof doc !== 'object' || doc === null || doc.version !== VERSION) return [];
   if (!Array.isArray(doc.accounts)) return [];
@@ -230,7 +262,30 @@ function parse(text: string): KnownAccount[] {
     // `label` needs no bump of its own: absent simply means never renamed, and
     // `field` maps a blank one to that rather than to a row with no visible
     // identity at all.
-    .map((r) => ({ ...r, orgId: field(r.orgId), label: field(r.label) }));
+    .map((r) => ({ ...r, orgId: field(r.orgId), label: field(r.label), usage: usageOf(r.usage) }));
+}
+
+/**
+ * A stored reading, or null for anything this cannot vouch for.
+ *
+ * Validated field by field and never thrown from, for the reason the whole of
+ * `parse` is: it runs inside the constructor's `try`, so one bad value here
+ * does not cost a percentage — it empties the ENTIRE account list, labels and
+ * all, and the panel simply shows fewer rows with nothing saying why.
+ *
+ * `percent` is checked finite rather than merely numeric: `JSON.parse` cannot
+ * produce NaN, but a hand-edited file can carry a string, and a bar drawn from
+ * one renders at a width nobody asked for instead of not rendering.
+ */
+function usageOf(value: unknown): AccountUsage | null {
+  if (typeof value !== 'object' || value === null) return null;
+  const { limits, at } = value as AccountUsage;
+  if (typeof at !== 'string' || !Array.isArray(limits)) return null;
+
+  const clean = limits.filter((l) =>
+    typeof l === 'object' && l !== null
+    && typeof l.label === 'string' && typeof l.percent === 'number' && Number.isFinite(l.percent));
+  return clean.length === 0 ? null : { limits: clean.map((l) => ({ label: l.label, percent: l.percent })), at };
 }
 
 // ---------------------------------------------------------------------------
@@ -242,10 +297,14 @@ function parse(text: string): KnownAccount[] {
  * `stateSince` and a row's shade. What it costs is specific and worth stating:
  * a harness restarted inside the few minutes a login is open forgets it, and
  * the pane is then nobody's. It stays on screen in Herdr for the human to
- * finish or close, which is the whole reason it is a visible pane, and the next
- * switch opens a second one beside it. Adopting it back the way `usage.ts`
- * adopts its agent is not available: that works by AGENT name, and this pane
- * hosts a shell that Herdr knows no name for.
+ * finish or close, which is the whole reason it is a visible pane.
+ *
+ * It is not ADOPTED back — that would want `from` and `sawLoggedOut`, the two
+ * things `settle` decides on, and neither survives the restart either, so an
+ * adopted login could never be finished and would sit pending forever. It is
+ * CLEANED UP instead, at the next switch and only there: see
+ * `closeStrayLogins`, which is why the second pane no longer appears beside the
+ * first.
  */
 interface Pending {
   /** What the login page was asked to pre-fill, if anything. */
@@ -335,7 +394,12 @@ export class Account {
     const pre = email !== null && EMAIL.test(email) ? ` --email ${email}` : '';
     let paneId: string;
     try {
-      paneId = await this.herdr.launchCommand(await this.where(), `claude auth login${pre}`);
+      const target = await this.where();
+      // The only moment a stray login pane is certainly finished with. See
+      // `closeStrayLogins`: this is what stops the second one appearing beside
+      // it, and asking for a switch is the proof that the old one is done.
+      await this.closeStrayLogins(target.cwd);
+      paneId = await this.herdr.launchCommand(target, `claude auth login${pre}`);
     } catch (err) {
       throw new Error(
         'you are logged out and the login pane could not be opened — run `claude auth login` '
@@ -347,6 +411,42 @@ export class Account {
       email, paneId, from: status.current, sawLoggedOut, since: Date.now(),
     };
     return this.view();
+  }
+
+  /**
+   * Hangs a limits reading on whichever account is live right now.
+   *
+   * The bars themselves still come from a live `/usage` reading and never from
+   * here. What this adds is that the account you switched AWAY from keeps the
+   * last numbers it had, which is the whole friction of running two
+   * subscriptions: before this, a switch blanked everything you knew about the
+   * other one.
+   *
+   * **Through `status()`, never `view()`.** That method settles a pending login
+   * and can close the human's login pane, so routing a usage reading through it
+   * would make reading the bars something that ends a half-finished login.
+   *
+   * **Nothing is recorded without an identity.** `status()` answering null is a
+   * `claude` that did not answer and `current: null` is nobody signed in;
+   * neither is an account, and attributing real numbers to a guessed one writes
+   * them against the wrong row — indistinguishable afterwards from a reading
+   * that was genuinely taken there.
+   *
+   * The identity is resolved AFTER the panel was read, so a switch landing
+   * inside that window would misattribute it. Not worth machinery: a switch
+   * needs a human at a browser, and the same human pressed this button.
+   */
+  async recordUsage(limits: UsageLimit[]): Promise<void> {
+    const status = await this.status();
+    if (!status?.current) return;
+
+    // Capture first, so an account nobody has switched to from here still has a
+    // row to hang this on — the reading is often the first thing we learn.
+    this.accounts.capture(status.current);
+    this.accounts.recordUsage(status.current, {
+      limits: limits.map((l) => ({ label: l.label, percent: l.percent })),
+      at: new Date().toISOString(),
+    });
   }
 
   /**
@@ -438,6 +538,39 @@ export class Account {
    * usage agent has never run, the login would sit at a security question while
    * the cockpit polled for a status that was never going to change.
    */
+  /**
+   * Closes a login pane a previous harness left behind.
+   *
+   * `pending` is in memory, so a harness restarted inside the few minutes a
+   * login is open forgets the pane — and `tsx watch` respawns the server on
+   * every save, which makes that ordinary rather than rare. The pane then
+   * belongs to nobody: the cockpit cannot finish it, and the next switch used
+   * to open a second one beside it.
+   *
+   * IDENTIFIED BY CWD RATHER THAN BY NAME, which is what makes this possible at
+   * all. Adoption the way `usage.ts` adopts its agent works on an AGENT name,
+   * and this pane hosts a shell Herdr knows no name for — but it is a shell in
+   * `~/.harness`, the one directory that is ours, and the usage agent sharing
+   * that directory always carries an `agent`. So a bare shell there is a login
+   * pane of ours and nothing else.
+   *
+   * ONLY FROM `switchTo`, and deliberately not at startup or shutdown. A login
+   * may be half-finished in a browser, where closing its pane takes the way
+   * back with it — that is why `shutdown` leaves it alone, and a restart-time
+   * sweep would do exactly what shutdown is careful not to. Asking for a new
+   * switch is the one signal that the old pane is spent.
+   *
+   * Best-effort throughout: a pane that will not close costs a stray tab, never
+   * the switch the human asked for.
+   */
+  private async closeStrayLogins(cwd: string): Promise<void> {
+    try {
+      const snap = await this.herdr.snapshot();
+      const stray = snap.panes.filter((p) => !p.agent && resolve(p.cwd) === resolve(cwd));
+      await Promise.all(stray.map((p) => this.herdr.closePane(p.pane_id).catch(() => {})));
+    } catch { /* herdr unreachable; the switch below reports that itself */ }
+  }
+
   private async where(): Promise<{ workspaceId: string; cwd: string; label: string }> {
     const snap = await this.herdr.snapshot();
     const workspace = snap.workspaces[0];

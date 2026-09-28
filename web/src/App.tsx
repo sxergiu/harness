@@ -306,6 +306,9 @@ function UsageDock(
     setFailed(null);
     try {
       onView(await post<UsageView>('/api/usage'));
+      // The server hangs this reading on the live account, so the rows below
+      // are one GET out of date until they are asked again.
+      account.reload();
     } catch (e) {
       // Stale bars stay up — they are still the last thing that was true, and
       // they say when.
@@ -652,37 +655,61 @@ function AccountRow(
 
   const org = `${account.subscriptionType ?? ''} ${account.orgName ?? ''}`.trim();
   return (
-    <div className="group/acct flex items-center gap-2 py-0.5">
-      <span
-        className={`max-w-[55%] shrink-0 truncate ${live ? 'text-neutral-300' : 'text-neutral-500'}`}
-        title={account.email}
-      >
-        {account.label ?? account.email}
-      </span>
-      <span className="min-w-0 flex-1 truncate text-neutral-700" title={account.email}>
-        {org}
-      </span>
-      {live ? (
-        <span className="shrink-0 text-neutral-600">live</span>
-      ) : (
-        <button
-          onClick={onSwitch}
-          disabled={busy}
-          title={`Sign out and sign in as ${account.email}`}
-          /* No `disabled:opacity-40` beside the `opacity-0`: the disabled rule
-             is emitted later and wins, so every hidden button would fade into
-             view while one is busy. */
-          className="shrink-0 text-neutral-600 opacity-0 group-hover/acct:opacity-100 hover:text-neutral-200"
+    <div className="group/acct py-0.5">
+      <div className="flex items-center gap-2">
+        <span
+          className={`max-w-[55%] shrink-0 truncate ${live ? 'text-neutral-300' : 'text-neutral-500'}`}
+          title={account.email}
         >
-          ⇄ switch
-        </button>
+          {account.label ?? account.email}
+        </span>
+        <span className="min-w-0 flex-1 truncate text-neutral-700" title={account.email}>
+          {org}
+        </span>
+        {live ? (
+          <span className="shrink-0 text-neutral-600">live</span>
+        ) : (
+          <button
+            onClick={onSwitch}
+            disabled={busy}
+            title={`Sign out and sign in as ${account.email}`}
+            /* No `disabled:opacity-40` beside the `opacity-0`: the disabled rule
+               is emitted later and wins, so every hidden button would fade into
+               view while one is busy. */
+            className="shrink-0 text-neutral-600 opacity-0 group-hover/acct:opacity-100 hover:text-neutral-200"
+          >
+            ⇄ switch
+          </button>
+        )}
+        <IconButton
+          label="✎"
+          title="Name this profile. Empty restores the address."
+          onClick={() => setRenaming(true)}
+          className="shrink-0 opacity-0 group-hover/acct:opacity-100"
+        />
+      </div>
+      {/*
+        A line of its own rather than a column in the row above: the address and
+        the org already compete for that width, and a third truncating thing
+        would cost whichever of them is longest.
+
+        NOT SHOWN FOR THE LIVE ACCOUNT, whose current numbers are the bars a few
+        pixels above this. A cached copy beside them is redundant at best, and
+        at worst a second figure disagreeing with the live one — and the age
+        would read as though the bars were that old too.
+
+        No refresh on it, and there cannot be one: these numbers are read by
+        driving `/usage` in an agent, which only answers for the account that is
+        signed in. Refreshing another account's would mean switching to it, and
+        nothing here switches accounts on its own.
+      */}
+      {!live && account.usage && (
+        <div className="truncate pl-0.5 text-neutral-700" title={`as of ${account.usage.at}`}>
+          {account.usage.limits.map((l) => `${l.label} ${Math.round(l.percent)}%`).join(' · ')}
+          {' · '}
+          {since(account.usage.at)} ago
+        </div>
       )}
-      <IconButton
-        label="✎"
-        title="Name this profile. Empty restores the address."
-        onClick={() => setRenaming(true)}
-        className="shrink-0 opacity-0 group-hover/acct:opacity-100"
-      />
     </div>
   );
 }

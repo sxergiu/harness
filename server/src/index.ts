@@ -7,7 +7,7 @@ import fastifyStatic from '@fastify/static';
 import Fastify from 'fastify';
 import { WebSocketServer, type WebSocket } from 'ws';
 import {
-  AGENT_SHADES, BIND_HOST, DEFAULT_PORT, DEV_PAGE_PORT, WS_PATH,
+  AGENT_SHADES, BIND_HOST, DEFAULT_PORT, DEV_PAGE_PORT, EFFORTS, MODELS, WS_PATH,
   type AccountView, type AgentDiff, type AgentShade, type AsideView, type BlockedView,
   type FeedEntry, type FeedPage, type FileContent, type HerdrRuleState, type ServerEvent,
   type SettingsView, type SubagentsView, type UsageView,
@@ -15,7 +15,10 @@ import {
 import { Account } from './account.js';
 import { Aside } from './aside.js';
 import { Board } from './board.js';
-import { claudeFiles, installClaudeFiles } from './claudeFiles.js';
+import { autoAcceptEnabled, setAutoAccept } from './chrome.js';
+import {
+  claudeFiles, configuredAlias, configuredEffort, hold, installClaudeFiles,
+} from './claudeFiles.js';
 import { buildAgentDiff, readAgentFile, touchedPaths } from './diff.js';
 import { Herdr } from './herdr.js';
 import { herdrRuleState, installHerdrRule, type HerdrRuleOutcome } from './herdrRules.js';
@@ -26,7 +29,9 @@ import {
 } from './instance.js';
 import { admits } from './origin.js';
 import { Projects } from './projects.js';
-import { rulesAreDefault, rulesText, setRules, startArgs } from './rules.js';
+import {
+  modelDefault, rulesAreDefault, rulesText, setModelDefault, setRules, startArgs,
+} from './rules.js';
 import { Transcripts, feedTurns, subagentPathFor, subagentRows } from './transcript.js';
 import { Usage } from './usage.js';
 
@@ -431,6 +436,59 @@ app.post<{ Params: { paneId: string }; Body: { text?: string } }>(
 );
 
 /**
+ * Switches ONE agent, down the same prompt seam every other slash command
+ * takes. The route exists for the two lines around the send: `/model` also
+ * saves the alias machine-wide, so the value it is about to overwrite is
+ * recorded first and put back once the write lands. See `hold`.
+ *
+ * Held before the send rather than after, so a `/model` that arrives at the
+ * agent before this process gets back to it is still covered. A send that
+ * fails leaves a hold nothing will ever satisfy, and it expires unused.
+ *
+ * The alias is also remembered against the pane, which is the only thing left
+ * that knows this agent is not on the machine default — the settings file no
+ * longer says so, and the context meter reads its window off exactly that.
+ */
+app.post<{ Params: { paneId: string }; Body: { alias?: string } }>(
+  '/api/agents/:paneId/model',
+  async (req, reply) => {
+    const alias = req.body?.alias;
+    if (typeof alias !== 'string' || !(MODELS as readonly string[]).includes(alias)) {
+      return reply.code(400).send({ error: `model must be one of ${MODELS.join(', ')}` });
+    }
+    return act(reply, async () => {
+      hold('model', alias, configuredAlias());
+      board.switched(req.params.paneId, alias);
+      await herdr.prompt(req.params.paneId, `/model ${alias}`);
+    });
+  },
+);
+
+/**
+ * The same seam and the same hold, for the same reason — `/effort` also saves
+ * machine-wide, writing `effortLevel` to `~/.claude/settings.json` as the
+ * default for new sessions.
+ *
+ * `max` takes no hold: it is session-scoped in the CLI, which writes nothing
+ * for it, so there is nothing about to move and a hold would wait out its whole
+ * expiry for a write that never comes. No pane memory either — the level is
+ * read back off the transcript, where the model needs an alias nothing records.
+ */
+app.post<{ Params: { paneId: string }; Body: { level?: string } }>(
+  '/api/agents/:paneId/effort',
+  async (req, reply) => {
+    const level = req.body?.level;
+    if (typeof level !== 'string' || !(EFFORTS as readonly string[]).includes(level)) {
+      return reply.code(400).send({ error: `effort must be one of ${EFFORTS.join(', ')}` });
+    }
+    return act(reply, async () => {
+      if (level !== 'max') hold('effortLevel', level, configuredEffort());
+      await herdr.prompt(req.params.paneId, `/effort ${level}`);
+    });
+  },
+);
+
+/**
  * Asks the aside, forking one off this agent's session if there is none yet.
  * The first question is slow — a tab, a launch, and Claude Code loading a forked
  * transcript — so the browser says so rather than looking hung.
@@ -521,6 +579,10 @@ app.post('/api/quit', async () => {
 app.post('/api/usage', async (_req, reply) => {
   try {
     const view: UsageView = await usage.read();
+    // Hung on the live account so the one you switch away from keeps its last
+    // numbers. Best-effort by construction: the reading is what was asked for,
+    // and failing to cache it must never turn it into a 503.
+    await account.recordUsage(view.limits).catch(() => {});
     return view;
   } catch (err) {
     return reply.code(503).send({ error: (err as Error).message });
@@ -660,14 +722,20 @@ app.post<{ Params: { id: string } }>('/api/workspaces/:id/agents', async (req, r
   if (!space.dir) return reply.code(400).send({ error: 'set a directory for this space first' });
 
   const name = board.nextAgentName(space.label);
+  // Read once and passed to both: what the flag said and what the pane is
+  // remembered as running have to be the same answer — see `startArgs`.
+  const alias = modelDefault();
   try {
     // ~4s of waiting inside there, and the button says so. A start that fails
     // leaves no tab behind — see `launchAgent`.
     const paneId = await herdr.launchAgent(
       name,
       { workspaceId: space.id, cwd: space.dir, label: name },
-      startArgs(projects.gitDelegated(space.dir)),
+      startArgs(projects.gitDelegated(space.dir), alias),
     );
+    // After the launch, so a start that threw records nothing: the pane it
+    // would name was closed, and the id is Herdr's to hand to somebody else.
+    if (alias) board.startedOn(paneId, alias);
     board.schedule();
     return { ok: true, paneId, name };
   } catch (err) {
@@ -801,9 +869,11 @@ app.post<{ Params: { id: string } }>('/api/tabs/:id/close', async (req, reply) =
  */
 const settingsView = (): SettingsView => ({
   rules: { text: rulesText(), isDefault: rulesAreDefault() },
+  model: { alias: modelDefault(), effort: configuredEffort() },
   checkouts: projects.all(),
   claudeFiles: claudeFiles(),
   herdr: herdrRuleState(),
+  chromeAutoAccept: autoAcceptEnabled(),
 });
 
 app.get('/api/settings', async () => settingsView());
@@ -817,6 +887,29 @@ app.post<{ Body: { text?: string } }>('/api/settings/rules', async (req, reply) 
     // Unlike the caches, this one reports: a rules edit the human believes was
     // saved and was not is the worst possible failure of this screen.
     return reply.code(500).send({ error: `could not save rules: ${(err as Error).message}` });
+  }
+  return settingsView();
+});
+
+/**
+ * Blank removes the choice, so agents start with no `--model` and the human's
+ * own settings apply — the same reset the rules box makes.
+ *
+ * Only what the picker offers is accepted. The file itself takes anything
+ * `claude` does, a full model id included, but a name that arrives here by any
+ * other route would be read on every later start and only ever show up as a
+ * start that fails.
+ */
+app.post<{ Body: { alias?: string } }>('/api/settings/model', async (req, reply) => {
+  const alias = req.body?.alias;
+  if (typeof alias !== 'string') return reply.code(400).send({ error: 'alias is required' });
+  if (alias !== '' && !(MODELS as readonly string[]).includes(alias)) {
+    return reply.code(400).send({ error: `model must be blank or one of ${MODELS.join(', ')}` });
+  }
+  try {
+    setModelDefault(alias);
+  } catch (err) {
+    return reply.code(500).send({ error: `could not save the model: ${(err as Error).message}` });
   }
   return settingsView();
 });
@@ -841,6 +934,22 @@ app.post<{ Body: { path?: string; gitDelegated?: boolean } }>(
 
 app.post<{ Body: { force?: boolean } }>('/api/settings/claude-files', async (req) => {
   installClaudeFiles(req.body?.force === true);
+  return settingsView();
+});
+
+/**
+ * The one setting here that makes the cockpit act on its own, so it is written
+ * only by this route and never inferred from anything else.
+ */
+app.post<{ Body: { enabled?: boolean } }>('/api/settings/chrome', async (req, reply) => {
+  if (typeof req.body?.enabled !== 'boolean') {
+    return reply.code(400).send({ error: 'enabled is required' });
+  }
+  try {
+    setAutoAccept(req.body.enabled);
+  } catch (err) {
+    return reply.code(500).send({ error: `could not save the setting: ${(err as Error).message}` });
+  }
   return settingsView();
 });
 

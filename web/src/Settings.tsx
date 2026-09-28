@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import type { SettingsView } from '@harness/shared';
-import { useApi } from './useHarness.js';
+import { MODELS, type SettingsView } from '@harness/shared';
+import { modelLabel, useApi } from './useHarness.js';
 
 /**
  * Everything about this INSTALL rather than this session: what agents are told,
@@ -64,6 +64,7 @@ export function Settings({ onClose }: { onClose: () => void }): React.ReactEleme
         ) : (
           <>
             <Rules view={view} onSave={(text) => void write('/api/settings/rules', { text })} />
+            <Model view={view} onSave={(alias) => void write('/api/settings/model', { alias })} />
             <Checkouts
               view={view}
               onRevoke={(path) =>
@@ -77,6 +78,7 @@ export function Settings({ onClose }: { onClose: () => void }): React.ReactEleme
               view={view}
               note={note}
               onInstall={(force) => void write('/api/settings/herdr', { force })}
+              onAutoAccept={(enabled) => void write('/api/settings/chrome', { enabled })}
             />
           </>
         )}
@@ -141,6 +143,55 @@ function Rules(
         </button>
         <span className="text-neutral-600">
           {view.rules.isDefault ? 'unchanged from what ships' : 'saved to ~/.harness/rules.md'}
+        </span>
+      </div>
+    </Section>
+  );
+}
+
+/**
+ * What agents the cockpit starts are run on. Unlike the header picker, this
+ * changes nothing that is already running and writes nothing of Claude Code's —
+ * it is a `--model` flag on the next start, and no choice means no flag.
+ */
+function Model(
+  { view, onSave }: { view: SettingsView; onSave: (alias: string) => void },
+): React.ReactElement {
+  const { alias, effort } = view.model;
+
+  return (
+    <Section
+      title="MODEL"
+      note="Passed as --model to agents the cockpit starts. No choice means no flag at all, so your own ~/.claude/settings.json decides — the same as an agent started by hand. Switching one agent from its header does not move this, or that file: the cockpit puts back whatever the switch overwrote. An alias is a request: one this account has no access to makes the start fail with the CLI's own message. Applies to agents started from now on."
+    >
+      <div className="flex flex-wrap items-center gap-2">
+        {/* `no choice` sits in the row as a sixth option rather than beside it
+            as a reset: it is a state of the same setting, not an undo. */}
+        {[...MODELS, ''].map((m) => (
+          <button
+            key={m || 'none'}
+            onClick={() => onSave(m)}
+            className={`rounded px-2 py-0.5 ${
+              (alias ?? '') === m
+                ? 'bg-neutral-700 text-neutral-100'
+                : 'bg-neutral-800 text-neutral-400 hover:text-neutral-200'
+            }`}
+          >
+            {m ? modelLabel(m) : 'no choice'}
+          </button>
+        ))}
+      </div>
+      <div className="mt-1 flex text-neutral-600">
+        <span>
+          {alias === null
+            ? 'No --model flag. Whatever ~/.claude/settings.json says applies.'
+            : `saved to ~/.harness/model — agents start with --model ${alias}`}
+        </span>
+        {/* Read from Claude Code's own settings rather than held here: no
+            --effort is passed, so that file is what agents actually start at.
+            Shown because nothing else on this screen says what that is. */}
+        <span className="ml-auto pl-2">
+          {effort === null ? 'no effort in settings' : `starts at ${effort} effort`}
         </span>
       </div>
     </Section>
@@ -249,10 +300,11 @@ const STATUS: Record<SettingsView['claudeFiles'][number]['status'], string> = {
  * Herdr's own detection updates entirely, which is what `stale` is measuring.
  */
 function HerdrRule(
-  { view, note, onInstall }: {
+  { view, note, onInstall, onAutoAccept }: {
     view: SettingsView;
     note: string | null;
     onInstall: (force: boolean) => void;
+    onAutoAccept: (enabled: boolean) => void;
   },
 ): React.ReactElement {
   const { installed, ours, version, remoteVersion, stale } = view.herdr;
@@ -293,6 +345,43 @@ function HerdrRule(
         )}
       </div>
       {note && <div className="mt-1 text-neutral-400">{note}</div>}
+
+      {/*
+        Here rather than in a section of its own: detecting the dialog and
+        answering it are one subject, and the dependency between them is only
+        obvious side by side. Nothing to answer without the rule above — an
+        undetected dialog reads `idle`, so no agent is ever blocked at one.
+      */}
+      <label className="mt-2 flex cursor-pointer items-start gap-1.5 text-neutral-400 hover:text-neutral-200">
+        <input
+          type="checkbox"
+          checked={view.chromeAutoAccept}
+          onChange={(e) => onAutoAccept(e.target.checked)}
+          className="mt-0.5 shrink-0"
+        />
+        <span>
+          answer it with “allow” automatically
+          <span className="block text-neutral-600">
+            the only thing this cockpit does at a prompt without you. It presses the dialog’s
+            own allow row — the session-wide one where that is offered — and nothing else:
+            every other permission prompt still waits for you.
+          </span>
+        </span>
+      </label>
+      {/*
+        Ticked with no rule in force is a setting that can never fire: the
+        dialog reads `idle`, so no agent is ever blocked at one and nothing
+        calls this. Said rather than prevented — the box stays clickable, since
+        turning it on before installing the rule is an order, not a mistake.
+        Only `!installed` is claimed: an override we did not write may carry a
+        rule of its own, and this cannot read it.
+      */}
+      {view.chromeAutoAccept && !installed && (
+        <div className="mt-1 text-amber-400">
+          Nothing will fire until the rule above is installed — an agent waiting on that
+          dialog reads as idle, so it is never blocked at one.
+        </div>
+      )}
     </Section>
   );
 }

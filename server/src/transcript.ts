@@ -1,9 +1,10 @@
 import {
-  closeSync, existsSync, openSync, readdirSync, readFileSync, readSync, statSync,
+  closeSync, existsSync, openSync, readdirSync, readSync, statSync,
 } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, isAbsolute, join, relative, sep } from 'node:path';
 import type { AgentStatus, ContextUse, FeedEntry, FeedTurn, SubagentRow } from '@harness/shared';
+import { configuredAlias } from './claudeFiles.js';
 import { sqlOf } from './sql.js';
 
 /**
@@ -26,7 +27,13 @@ export interface Entry {
    * of, so any comparison must skip the entries that have none.
    */
   uuid?: string;
-  message?: { role?: string; content?: unknown; usage?: Usage };
+  message?: { role?: string; content?: unknown; usage?: Usage; model?: string };
+  /**
+   * Top level, unlike the model beside it, and written only on `assistant`
+   * entries. Absent whenever the model has no effort level to record — measured
+   * on real `claude-haiku-4-5` requests, which carry none at all.
+   */
+  effort?: string;
   toolUseResult?: unknown;
   attachment?: unknown;
   timestamp?: string;
@@ -212,6 +219,43 @@ const WINDOW = 200_000;
 const WINDOW_1M = 1_000_000;
 
 /**
+ * The model the agent's newest request actually ran on, as the transcript
+ * records it. A SUBAGENT's requests carry its own model, so an unfiltered read
+ * would report the subagent's — `contextOf`'s trap, in a place where the wrong
+ * answer is a plausible model name rather than a number out of range.
+ */
+export function modelOf(entries: Entry[]): string | null {
+  return lastRequest(entries)?.message?.model ?? null;
+}
+
+/**
+ * The entry both readers answer from, so that what they say is of ONE request
+ * by construction rather than by two loops agreeing. A filter that changed in
+ * one and not the other would pair a model with an older request's effort, and
+ * nothing on screen would look wrong.
+ */
+function lastRequest(entries: Entry[]): Entry | null {
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const e = entries[i];
+    if (!e || e.isSidechain || e.type !== 'assistant') continue;
+    if (e.message?.model) return e;
+  }
+  return null;
+}
+
+/**
+ * What that same request was asked to think at.
+ *
+ * Absent is an answer and not a miss, which is why this reads one entry rather
+ * than scanning for the newest that has an effort: a `haiku` request records
+ * none at all, and scanning on would report the level of the opus request
+ * before it beside haiku's name.
+ */
+export function effortOf(entries: Entry[]): string | null {
+  return lastRequest(entries)?.effort ?? null;
+}
+
+/**
  * Context held by the agent's newest request, and the window it is held against.
  *
  * The tokens are exact and need no interpretation: input + cache_read +
@@ -220,11 +264,21 @@ const WINDOW_1M = 1_000_000;
  *
  * The WINDOW is the soft part. Nothing records it — a transcript says
  * `claude-opus-5` whether the session runs 200k or 1M — so it is read from the
- * model in the user's own settings, the same file these agents load, and
- * widened if any request in this session ever exceeded it. A session that
- * outgrew the assumed window is proof of a larger one.
+ * two aliases that may name this agent's model, and widened if any request in
+ * this session ever exceeded it. A session that outgrew the assumed window is
+ * proof of a larger one.
+ *
+ * `known` is what the caller knows about THIS pane — the alias it was switched
+ * to, else the `--model` we started it with — and the settings file is the
+ * fallback for an agent neither is true of, which is one somebody started by
+ * hand. A chain rather than the wider of the two: taking the max granted 1M off
+ * the cockpit's own default to agents that never carried the flag, and that is
+ * the unsafe direction, since a window too wide under-reports how full a
+ * session is. Where nothing specific is known the machine default is the only
+ * claim there is, and the peak-widening below still rescues a session that
+ * outgrows it.
  */
-export function contextOf(entries: Entry[]): ContextUse | null {
+export function contextOf(entries: Entry[], known: string | null): ContextUse | null {
   let last = 0;
   let peak = 0;
   for (const e of entries) {
@@ -239,28 +293,29 @@ export function contextOf(entries: Entry[]): ContextUse | null {
     peak = Math.max(peak, tokens);
   }
   if (last === 0) return null;
-  const base = configuredWindow();
+  const model = modelOf(entries);
+  const base = windowFor(model, known ?? configuredAlias());
   return { tokens: last, window: peak > base ? WINDOW_1M : base };
 }
 
-/** mtime of the settings we last parsed, so this is one stat per resync. */
-let settingsAt = -1;
-let settingsWindow = WINDOW;
-
-function configuredWindow(): number {
-  const path = join(homedir(), '.claude', 'settings.json');
-  try {
-    const { mtimeMs } = statSync(path);
-    if (mtimeMs !== settingsAt) {
-      settingsAt = mtimeMs;
-      const model = (JSON.parse(readFileSync(path, 'utf8')) as { model?: unknown }).model;
-      settingsWindow = typeof model === 'string' && model.includes('[1m]') ? WINDOW_1M : WINDOW;
-    }
-  } catch {
-    // No settings file, or one we cannot parse. The smaller window is the safe
-    // read: it over-reports rather than hiding that a session is nearly full.
-  }
-  return settingsWindow;
+/**
+ * The window a session gets, from the alias the settings name and the model the
+ * transcript says it is actually running.
+ *
+ * An alias is a claim about EVERY agent and is true of at most some of them:
+ * agents the cockpit starts carry their own `--model`, and a `/model` typed at
+ * one agent rewrites the settings file machine-wide. The transcript cannot say
+ * `[1m]`, but it does say the family, which is enough to refuse the wider window
+ * to a session plainly not on that model — and 200k is the safe refusal, since
+ * it over-reports rather than hiding that a session is nearly full.
+ *
+ * A model we have not read yet leaves the alias to stand alone, which is what
+ * this did before there was anything to check it against.
+ */
+export function windowFor(model: string | null, alias: string | null): number {
+  if (alias === null || !alias.includes('[1m]')) return WINDOW;
+  const family = alias.replace('[1m]', '');
+  return model === null || model.includes(family) ? WINDOW_1M : WINDOW;
 }
 
 /** The newest tool call, as a line you can read at a glance. */

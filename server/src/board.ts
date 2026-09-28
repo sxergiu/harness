@@ -3,13 +3,15 @@ import {
   STATUS_ORDER, type AgentRow, type AgentShade, type AgentStatus, type WorkspaceRow,
 } from '@harness/shared';
 import { ASIDE_PREFIX, asideName } from './aside.js';
+import { answerChromeDialog, forgetPane as forgetChromeDialog } from './chrome.js';
+import { settleHolds } from './claudeFiles.js';
 import { touchedPaths } from './diff.js';
 import { asStatus, type Herdr, type PaneInfo } from './herdr.js';
 import type { History } from './history.js';
 import { notify } from './notify.js';
 import type { Projects } from './projects.js';
 import {
-  Transcripts, activityOf, assignmentOf, contextOf, errorOf, goalOf, todoOf, transcriptPathFor, type Entry,
+  Transcripts, activityOf, assignmentOf, contextOf, effortOf, errorOf, goalOf, modelOf, todoOf, transcriptPathFor, type Entry,
 } from './transcript.js';
 import { USAGE_AGENT } from './usage.js';
 
@@ -54,10 +56,20 @@ export class Board {
   private namedAs = new Map<string, string>();
   private started = false;
   /**
-   * Hand-set space directories. Deliberately not persisted: a workspace id only
-   * means anything inside one Herdr session, and Herdr recycles them — a dir
-   * remembered across restarts could start an agent in the wrong repo. Without
-   * an override the dir is read back off the space's panes.
+   * workspace id → the directory its agents are started in. SEEDED ONCE from
+   * the space's panes (`seedCwd`) and pinned from then on, so the only thing
+   * that ever moves it is the human.
+   *
+   * Re-reading it every resync is what this replaced, and it was a live bug: a
+   * space labelled `e-avize-site` held two agents in `repos/e-avize` and one
+   * stray shell plus one agent in `repos/claude-harness`, the mode came out 2–2
+   * and Herdr's listing order broke the tie for the wrong repo. Starting an
+   * agent there then launched it in that repo, which made it 3–2 and pinned the
+   * space to it for good — the vote reinforcing its own mistake.
+   *
+   * Deliberately not persisted: a workspace id only means anything inside one
+   * Herdr session, and Herdr recycles them — a dir remembered across restarts
+   * could start an agent in the wrong repo. A restart re-seeds instead.
    */
   private dirs = new Map<string, string>();
   /**
@@ -78,6 +90,40 @@ export class Board {
   private locks = new Map<string, number>();
   /** paneId → its hand-set tint. Applied in `agents()` — see the note there. */
   private shades = new Map<string, AgentShade>();
+  /**
+   * paneId → the alias it was switched to from its header, which is the only
+   * record that this agent is not on the machine default: the switch used to
+   * leave one in `~/.claude/settings.json` and no longer does, since that file
+   * is put back afterwards (`hold`). Only `contextOf` reads it, to pick the
+   * window the transcript cannot name.
+   *
+   * In memory and dropped with the pane, for the shade's reason. After a
+   * restart the meter falls back to the machine default and the peak-widening
+   * recovers the rest, which is the safe direction: 200k over-reports how full
+   * a session is rather than hiding it.
+   */
+  private switchedTo = new Map<string, string>();
+
+  /**
+   * paneId → the `--model` this cockpit actually started that pane with.
+   *
+   * `~/.harness/model` is a claim about agents WE start and says nothing about
+   * one started by hand, so reading it straight off the file and applying it to
+   * every row granted a 1M window to agents that never got the flag — the
+   * unsafe direction, since it hides that a session is nearly full. Recorded at
+   * the launch that passed it, it stops being a claim about the machine and
+   * becomes a fact about the pane, which is what `contextOf` needs.
+   *
+   * Only set where an alias was really passed: with no choice stored there is
+   * no flag (`argsFor`), and the agent inherits the settings file like any
+   * other — so an absent entry must fall through to it rather than record null
+   * and mean something.
+   *
+   * In memory and dropped with the pane, exactly as `switchedTo` is and for the
+   * same reason. After a restart the meter falls back to the machine default
+   * and the peak-widening recovers the rest.
+   */
+  private startedBy = new Map<string, string>();
 
   constructor(
     private readonly herdr: Herdr,
@@ -208,6 +254,24 @@ export class Board {
     this.onChange();
   }
 
+  /**
+   * Records what one agent was switched to. No `onChange`: nothing on the wire
+   * carries it, and the window it picks only moves once the agent's next
+   * request is in the transcript, which the heartbeat is already watching for.
+   */
+  switched(paneId: string, alias: string): void {
+    this.switchedTo.set(paneId, alias);
+  }
+
+  /**
+   * Records the `--model` a start passed, for the same reason and with the same
+   * silence as `switched`. Called only by the route that launched the pane,
+   * which is the one place that knows the flag went with it.
+   */
+  startedOn(paneId: string, alias: string): void {
+    this.startedBy.set(paneId, alias);
+  }
+
   /** Tints one row, or clears it with `null`. */
   setShade(paneId: string, shade: AgentShade | null): void {
     if (shade === null) this.shades.delete(paneId);
@@ -268,8 +332,16 @@ export class Board {
           .filter((a): a is { pane_id: string; name: string } => typeof a.name === 'string')
           .map((a) => [a.pane_id, a.name]),
       );
+      // Herdr recycles workspace ids exactly as it recycles pane ids, so a dir
+      // kept past the space it describes would hand a brand-new space another
+      // repo's root — this bug by the other door.
+      const live = new Set(snap.workspaces.map((w) => w.workspace_id));
+      for (const id of this.dirs.keys()) {
+        if (!live.has(id)) this.dirs.delete(id);
+      }
+
       workspaces = snap.workspaces.map((w) => {
-        const dir = this.dirs.get(w.workspace_id) ?? commonCwd(panes, w.workspace_id);
+        const dir = this.spaceDir(w.workspace_id, panes, names);
         return {
           id: w.workspace_id,
           label: w.label,
@@ -287,6 +359,11 @@ export class Board {
     // A pass of its own because a fork's pane may be iterated either side of
     // its parent's, and the loop below skips it as an instrument regardless.
     const forks = forkStatuses(panes, names);
+
+    // Where a per-agent switch gets undone. On this heartbeat rather than a
+    // timer of its own, because a `/model` queued behind a long turn lands at
+    // no time anybody can predict — see `settleHolds`.
+    settleHolds();
 
     const used = new Set<string>();
     const draft: Array<{ row: AgentRow; paths: string[] }> = [];
@@ -357,7 +434,16 @@ export class Board {
           filesSince: touchedPaths(entries.slice(assignment.at)).length,
         },
         error: errorOf(entries),
-        context: contextOf(entries),
+        model: modelOf(entries),
+        effort: effortOf(entries),
+        // Most specific fact about THIS pane first: what it was switched to,
+        // else what we started it with. Neither known leaves `contextOf` to
+        // the machine default, which is all there is to say about an agent
+        // somebody started by hand.
+        context: contextOf(
+          entries,
+          this.switchedTo.get(p.pane_id) ?? this.startedBy.get(p.pane_id) ?? null,
+        ),
         fileCount: paths.length,
         contendedWith: [],
         aside: fork ?? (this.forked.has(p.pane_id) ? 'cleared' : null),
@@ -370,6 +456,12 @@ export class Board {
 
       draft.push({ row, paths });
       if (changed) this.announce(row);
+      // Off every resync rather than off the transition, so a dialog already on
+      // screen when the cockpit started is answered too — and a second prompt
+      // arriving before the first's `working` was ever observed does not sit
+      // there because the status never appeared to change. It reads a pane only
+      // when the human has turned it on, and answers each screen once.
+      if (row.status === 'blocked') void answerChromeDialog(this.herdr, p.pane_id, name);
       // An API error leaves the agent idle, not blocked, so Herdr's status says
       // nothing about it — this is the only thing that will tell you it stopped.
       // Announced on the transition only, and never for what was already on
@@ -388,10 +480,13 @@ export class Board {
       this.history.remember(old);
       // Herdr recycles pane ids, so a trace kept past the pane it describes
       // would put a fork on whatever agent inherits the id next — and equally a
-      // shade, or a dead agent's hold on a slot.
+      // shade, a dead agent's hold on a slot, or its model.
       this.forked.delete(paneId);
       this.shades.delete(paneId);
       this.locks.delete(paneId);
+      this.switchedTo.delete(paneId);
+      this.startedBy.delete(paneId);
+      forgetChromeDialog(paneId);
       this.onSessionGone(paneId);
       if (this.started) {
         notify(this.herdr, {
@@ -410,6 +505,23 @@ export class Board {
     this.workspaces = workspaces;
     this.started = true;
     this.onChange();
+  }
+
+  /**
+   * The directory this space works in: whatever it is already pinned to, or the
+   * one seed it is allowed to take from its panes.
+   *
+   * Seeding writes through to `dirs`, so a space is read off its panes exactly
+   * once and is a fixed fact afterwards. A seed that finds nothing pins
+   * nothing — the space simply has no dir until it grows a pane worth reading
+   * or the human types one, and starting an agent in it already refuses.
+   */
+  private spaceDir(id: string, panes: PaneInfo[], names: Map<string, string>): string | null {
+    const pinned = this.dirs.get(id);
+    if (pinned !== undefined) return pinned;
+    const seed = seedCwd(panes, id, names);
+    if (seed !== null) this.dirs.set(id, seed);
+    return seed;
   }
 
   private announce(row: AgentRow): void {
@@ -458,25 +570,56 @@ export class Board {
 }
 
 /**
- * The directory a space is working in, taken from the panes it already has —
- * the ones a human opened there. The commonest wins, so a stray pane in /tmp
- * does not redirect the space.
+ * The one reading a space's panes are allowed to give of where it works, taken
+ * once and pinned by `spaceDir`.
+ *
+ * AGENTS ARE THE EVIDENCE, and shells are only what is left when there are no
+ * agents. A pane sitting at a shell is as often a window someone opened
+ * elsewhere and forgot as it is the space's work, and on the board this was
+ * observed dragging a space into another repo. An agent, by contrast, was
+ * started to do the work that space exists for.
+ *
+ * Instruments never vote at all. The usage agent runs in `~/.harness`, which is
+ * nobody's repo, and an aside runs in its parent's cwd — a second voice for a
+ * directory that already has one.
  */
-function commonCwd(panes: PaneInfo[], workspaceId: string): string | null {
+export function seedCwd(
+  panes: PaneInfo[],
+  workspaceId: string,
+  names: Map<string, string>,
+): string | null {
+  const mine = panes.filter(
+    (p) => p.workspace_id === workspaceId && p.cwd && !isInstrument(names.get(p.pane_id)),
+  );
+  const agents = mine.filter((p) => p.agent);
+  return leader((agents.length > 0 ? agents : mine).map((p) => p.cwd));
+}
+
+/**
+ * The cwd more panes share than any other, or null when nothing is ahead.
+ *
+ * A tie has to answer null. Whichever cwd Herdr happened to list first is not
+ * evidence of anything, and a seed is kept for the life of the space — so a
+ * coin flip here is not a wrong dir for one heartbeat but a wrong dir until
+ * somebody notices. Nothing is the honest reading, and it costs one typed path.
+ */
+function leader(cwds: string[]): string | null {
   const counts = new Map<string, number>();
-  for (const p of panes) {
-    if (p.workspace_id !== workspaceId || !p.cwd) continue;
-    counts.set(p.cwd, (counts.get(p.cwd) ?? 0) + 1);
-  }
+  for (const cwd of cwds) counts.set(cwd, (counts.get(cwd) ?? 0) + 1);
+
   let best: string | null = null;
   let bestCount = 0;
+  let tied = false;
   for (const [cwd, n] of counts) {
     if (n > bestCount) {
       best = cwd;
       bestCount = n;
+      tied = false;
+    } else if (n === bestCount) {
+      tied = true;
     }
   }
-  return best;
+  return tied ? null : best;
 }
 
 /** Blocked first, then longest-waiting first within each status. */

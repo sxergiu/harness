@@ -166,6 +166,21 @@ export function useApi(): {
   return { post, get };
 }
 
+/**
+ * `claude-opus-5` → `opus-5`. The prefix is on every model there has ever been,
+ * so it distinguishes nothing and costs the width that the version needs.
+ */
+export const modelName = (model: string): string => model.replace(/^claude-/, '');
+
+/**
+ * `opus[1m]` → `opus · 1M context`. The suffix is what the alias means and the
+ * only thing that distinguishes two otherwise identical rows in a picker, and
+ * it is not a name anything outside Claude Code would recognise. The rest is
+ * left bare rather than labelled `200k`: that would be a claim about every
+ * model's standard window, and only the 1M one has been established here.
+ */
+export const modelLabel = (alias: string): string => alias.replace('[1m]', ' · 1M context');
+
 /** "12m" / "3h" — time in the current state, which is what the board reports. */
 export function since(iso: string | null): string {
   if (!iso) return '—';

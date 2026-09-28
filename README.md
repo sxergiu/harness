@@ -28,7 +28,7 @@ It runs on `127.0.0.1` for one person on one machine. It is never deployed.
   It is not a terminal mirror.
 - **A per-agent diff**, built from that agent's own `Write`/`Edit` results.
 - **Actions**: prompt an agent, interrupt it, answer one that is blocked, start a new one,
-  jump to its real terminal pane.
+  switch the model it runs on, jump to its real terminal pane.
 - **Notifications** on blocked / finished / died, as both a native alert and a Herdr toast.
 
 ## What it guarantees
@@ -51,6 +51,14 @@ default, from a checkbox on the space — so an agent that publishes your blog c
 to a work repo. The exception is scoped in the prompt and the grant is stored against the
 directory, but it is an instruction like the rest: nothing stops an agent running `git push`
 in a checkout that was never delegated.
+
+**It presses one key on its own, and only if you ask it to.** Every keystroke this sends is
+one you pressed in the blocked panel, with a single exception: an opt-in setting lets it
+answer Claude in Chrome's site-permission dialog with *allow*, for people who have already
+decided a browsing agent may browse. It is off unless you turn it on, it answers that one
+dialog and no other prompt, and it reads the allow digit off the dialog rather than pressing a
+fixed one — the row numbering changes, and the `2` that allows on one layout is **deny** on
+the other. Every press is logged.
 
 **The diff is accurate but incomplete.** It is built from recorded tool calls, so a tree
 that was already dirty is never blamed on an agent. But two kinds of write leave no tool

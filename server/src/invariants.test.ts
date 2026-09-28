@@ -1,18 +1,24 @@
 import assert from 'node:assert/strict';
+import { readFileSync, readdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { test } from 'node:test';
 import { sameAccount } from '@harness/shared';
-import { statusOf } from './account.js';
-import { decide } from './claudeFiles.js';
+import { parse as parseAccounts, rowFor, statusOf } from './account.js';
+import { seedCwd } from './board.js';
+import { HOLD_MS, decide, holdFor, settleAction } from './claudeFiles.js';
 import { buildAgentDiff, within } from './diff.js';
-import { announces, backoffMs, paneTookText, promptBoxHolds, staleServerWarning } from './herdr.js';
+import {
+  announces, backoffMs, paneTookText, promptBoxHolds, staleServerWarning, type PaneInfo,
+} from './herdr.js';
 import { parse as parseRecent } from './history.js';
 import { isOurs, merge, versionOf } from './herdrRules.js';
 import { shouldOpen, type Running } from './instance.js';
 import { admits, isLocal } from './origin.js';
 import { parse } from './projects.js';
-import { rulesFor } from './rules.js';
-import { goalOf, slugForCwd, type Entry } from './transcript.js';
+import { argsFor, modelFrom, rulesFor } from './rules.js';
+import {
+  contextOf, effortOf, goalOf, modelOf, slugForCwd, windowFor, type Entry,
+} from './transcript.js';
 import { cropPanel, limitsOf } from './usage.js';
 
 /**
@@ -25,6 +31,38 @@ import { cropPanel, limitsOf } from './usage.js';
  * socket, the real `~/.claude` transcripts or the network, so the suite says
  * the same thing on a machine with no agents running.
  */
+
+// -- the suite itself ------------------------------------------------------
+// `npm test` names its files outright: node's own glob support arrived after
+// the version `engines` declares, and a POSIX shell expanding `*` for us is
+// exactly what broke the build scripts on Windows. Handing node the DIRECTORY
+// instead is worse than either — measured here, `--test server/src` ran the
+// whole directory as one opaque case and reported `tests 1, pass 1`, green and
+// meaningless.
+//
+// So the list is maintained by hand, and this is what stops a hand-maintained
+// list from silently going short. A test file nobody runs is the purest form of
+// the failure this suite exists for: it reports nothing, and reporting nothing
+// is indistinguishable from passing.
+
+test('EVERY TEST FILE IS NAMED IN `npm test` — one nobody runs says nothing', () => {
+  const root = new URL('../../', import.meta.url);
+  const script = (
+    JSON.parse(readFileSync(new URL('package.json', root), 'utf8')) as
+      { scripts: Record<string, string> }
+  ).scripts.test;
+
+  const onDisk = readdirSync(new URL('server/src/', root))
+    .filter((name) => name.endsWith('.test.ts'))
+    .sort();
+
+  // Compared as the script spells them — forward slashes, since that is what is
+  // written in the manifest on every platform — never as a resolved path.
+  const missing = onDisk.filter((name) => !script.includes(`server/src/${name}`));
+  assert.deepEqual(missing, [], `not run by \`npm test\`: ${missing.join(', ')}`);
+  // And the suite is plural, which is the state this guard was added to keep.
+  assert.ok(onDisk.length >= 2);
+});
 
 // -- invariant 14: the prompt box ------------------------------------------
 // `agent.prompt` does not reliably submit, and the nudge must be content-free.
@@ -310,6 +348,112 @@ test('the two limit bars are read', () => {
   assert.equal(limitsOf(panel).length, 2);
 });
 
+// -- the model an agent runs on --------------------------------------------
+// Every wrong answer here is a plausible one: an agent started on a model
+// nobody chose looks exactly like one started right, and a window measured
+// against the wrong model is a percentage that is simply too low.
+
+test('no stored model means no flag at all', () => {
+  assert.deepEqual(argsFor('RULES', null), ['--append-system-prompt', 'RULES']);
+  assert.deepEqual(
+    argsFor('RULES', 'sonnet[1m]'),
+    ['--append-system-prompt', 'RULES', '--model', 'sonnet[1m]'],
+  );
+});
+
+test('a blank or newline-bearing model file is no choice', () => {
+  assert.equal(modelFrom('  \n '), null);
+  // Invariant 11: Herdr fails the whole `agent.start` on a newline, with an
+  // encoding error that says nothing about models.
+  assert.equal(modelFrom('opus\nsonnet'), null);
+  assert.equal(modelFrom(' opus[1m]\n'), 'opus[1m]');
+});
+
+test('a hold waits for the write, then restores, and gives up rather than guessing', () => {
+  const hold = { want: 'haiku', restoreTo: 'opus[1m]', expires: 100 };
+  // The switch is sent and the CLI has not written yet. Restoring now puts the
+  // old alias back BEFORE the new one arrives, and the file then keeps the new
+  // one for good — the exact bug the hold exists to prevent, and invisible.
+  assert.equal(settleAction('opus[1m]', hold, 0), 'wait');
+  assert.equal(settleAction('haiku', hold, 0), 'restore');
+  // A `/model` queued at a working agent may never land — the human may have
+  // cleared the session under it. Writing anyway would rewrite a default
+  // against a switch that never happened.
+  assert.equal(settleAction('opus[1m]', hold, 100), 'give-up');
+  // The human editing settings by hand mid-hold is not the write we are
+  // waiting for, and is left alone until the hold expires.
+  assert.equal(settleAction('sonnet', hold, 0), 'wait');
+});
+
+test('a second switch restores what the FIRST one found, not what it found', () => {
+  const first = holdFor(undefined, 'haiku', 'opus[1m]', 0);
+  assert.deepEqual(first, { want: 'haiku', restoreTo: 'opus[1m]', expires: HOLD_MS });
+  // Two agents switched inside one window are two writes to one key. By the
+  // time the second is sent the file may already say `haiku`, and restoring to
+  // that would leave the first agent's alias standing as the machine default —
+  // which is the whole thing being defended against, arrived at from inside.
+  assert.deepEqual(
+    holdFor(first!, 'sonnet', 'haiku', 0),
+    { want: 'sonnet', restoreTo: 'opus[1m]', expires: HOLD_MS },
+  );
+});
+
+test('switching to what the file already says takes no hold', () => {
+  // There is nothing to put back, and a hold would restore the alias over
+  // itself on the next heartbeat.
+  assert.equal(holdFor(undefined, 'opus[1m]', 'opus[1m]', 0), null);
+  // Settings naming no model at all is a real state, and the restore for it is
+  // to remove the key rather than to write the string "null" into it.
+  assert.deepEqual(holdFor(undefined, 'haiku', null, 0)?.restoreTo, null);
+});
+
+test('the model is read past a subagent, whose requests are its own', () => {
+  const entries: Entry[] = [
+    { type: 'assistant', message: { model: 'claude-opus-5' } },
+    { type: 'assistant', isSidechain: true, message: { model: 'claude-haiku-4-5' } },
+  ];
+  assert.equal(modelOf(entries), 'claude-opus-5');
+});
+
+test('the effort is read off the same request as the model, never an older one', () => {
+  const entries: Entry[] = [
+    { type: 'assistant', effort: 'high', message: { model: 'claude-opus-5' } },
+    // Measured: a real `haiku` request records no effort at all. Reading on
+    // past it answers `high` — the level of a request that is no longer the
+    // newest — and the header would show it beside the newer model's name.
+    { type: 'assistant', message: { model: 'claude-haiku-4-5' } },
+  ];
+  assert.equal(effortOf(entries), null);
+  assert.equal(effortOf(entries.slice(0, 1)), 'high');
+});
+
+test('the 1M window is refused to a session not on that model', () => {
+  // The settings alias is machine-wide and true of at most some agents, since a
+  // `/model` typed at one rewrites it for all of them.
+  assert.equal(windowFor('claude-sonnet-5', 'opus[1m]'), 200_000);
+  assert.equal(windowFor('claude-opus-5', 'opus[1m]'), 1_000_000);
+  assert.equal(windowFor('claude-opus-5', 'opus'), 200_000);
+  // Nothing read yet leaves the alias standing alone, as it did before there
+  // was anything to check it against.
+  assert.equal(windowFor(null, 'opus[1m]'), 1_000_000);
+});
+
+test('the window follows what is KNOWN of the pane, and the family check binds it too', () => {
+  const entries: Entry[] = [
+    { type: 'assistant', message: { model: 'claude-sonnet-5', usage: { input_tokens: 50_000 } } },
+  ];
+  // A known alias — what the pane was switched to, or started with — answers on
+  // its own, which is also what keeps this test off `~/.claude`: the settings
+  // file is consulted only where nothing is known, and `??` never gets there.
+  assert.equal(contextOf(entries, 'sonnet[1m]')?.window, 1_000_000);
+  assert.equal(contextOf(entries, 'sonnet[1m]')?.tokens, 50_000);
+  // THE KNOWN ALIAS IS NOT PRIVILEGED. It was the wider of two claims that
+  // granted 1M to sessions plainly not on that model; one claim resolved by
+  // precedence still has to survive the same family check, or the cockpit's own
+  // `--model` becomes a way to widen any window on the board.
+  assert.equal(contextOf(entries, 'opus[1m]')?.window, 200_000);
+});
+
 // -- git delegation --------------------------------------------------------
 // An agent wrongly told it may push looks exactly like one that was not, on
 // every screen the cockpit has. The first sign of a mistake here is a commit in
@@ -469,6 +613,46 @@ test('TWO ACCOUNTS ON ONE ADDRESS are two accounts', () => {
   assert.equal(sameAccount(pro, { ...pro }), true);
 });
 
+// -- the per-account usage cache -------------------------------------------
+// Hung on the account row, so the account you switch AWAY from keeps the last
+// numbers it had. Both failures below leave a row that still renders, with the
+// cached reading simply absent — which is indistinguishable from an account
+// that has never been read.
+
+test('A CAPTURE CARRIES OVER WHAT THE CLI CANNOT REPORT', () => {
+  const identity = { email: 'a@b.com', orgId: 'o-1', orgName: 'Acme', subscriptionType: 'pro' };
+  const prior = {
+    ...identity,
+    label: 'work',
+    usage: { limits: [{ label: 'session', percent: 12 }], at: '2026-09-28T10:00:00.000Z' },
+  };
+  // `capture` runs every two seconds while a login is open. Rebuilding from the
+  // identity alone erases both of these within a tick of learning them.
+  assert.deepEqual(rowFor(identity, prior).usage, prior.usage);
+  assert.equal(rowFor(identity, prior).label, 'work');
+  // A never-seen account has neither, and must not invent them.
+  assert.equal(rowFor(identity, undefined).usage, null);
+  assert.equal(rowFor(identity, undefined).label, null);
+});
+
+test('a stored reading survives the parse, and a malformed one costs only itself', () => {
+  const row = (usage: unknown): string =>
+    JSON.stringify({ version: 2, accounts: [{ email: 'a@b.com', orgId: 'o-1', label: null, usage }] });
+
+  const good = { limits: [{ label: 'week', percent: 71 }], at: '2026-09-28T10:00:00.000Z' };
+  assert.deepEqual(parseAccounts(row(good))[0]?.usage, good);
+
+  // Every one of these must answer null rather than throw. `parse` runs inside
+  // the constructor's try, so a throw here does not cost a percentage — it
+  // empties the WHOLE list, labels and all, and the panel just shows fewer rows.
+  for (const bad of [null, 'nonsense', 42, {}, { at: 1, limits: [] }, { at: 'x', limits: 'no' },
+    { at: 'x', limits: [{ label: 'week', percent: 'lots' }] }]) {
+    const parsed = parseAccounts(row(bad));
+    assert.equal(parsed.length, 1, 'the row itself must survive a reading it cannot read');
+    assert.equal(parsed[0]?.usage, null);
+  }
+});
+
 test('SIGNED OUT is an answer, not a failure', () => {
   // The distinction the whole panel rests on: this is `available: true` with
   // nobody signed in, where a null below is a `claude` that did not answer.
@@ -485,4 +669,64 @@ test('anything that is not the shape we know answers null', () => {
   assert.equal(statusOf('Error: not logged in'), null, 'an error printed to stdout');
   assert.equal(statusOf('{"loggedIn":"yes"}'), null, 'truthy is not a boolean');
   assert.equal(statusOf('null'), null);
+});
+
+// -- the space's directory -------------------------------------------------
+// The seed is read once and then pinned for the life of the space, so a wrong
+// answer here is not a wrong dir for one heartbeat: it is where every agent
+// that space ever starts gets launched, and it looks exactly like a right one
+// until one lands in another repo.
+
+const paneAt = (id: string, cwd: string, rest: Partial<PaneInfo> = {}): PaneInfo => ({
+  pane_id: id, workspace_id: 'w0', tab_id: `t${id}`, cwd, ...rest,
+});
+
+test('AGENTS OUTVOTE SHELLS, which is the bug this was found as', () => {
+  // Measured on the live board: a space labelled `e-avize-site` holding two
+  // agents in e-avize, one agent and one forgotten shell in claude-harness.
+  // Counting every pane made that 2–2, Herdr's listing order gave it to the
+  // wrong repo, and the agent started there made it 3–2 for good.
+  const panes = [
+    paneAt('p1', '/repos/claude-harness'),
+    paneAt('pH', '/repos/claude-harness', { agent: 'claude' }),
+    paneAt('pN', '/repos/e-avize', { agent: 'claude' }),
+    paneAt('pP', '/repos/e-avize', { agent: 'claude' }),
+    paneAt('q1', '/repos/elsewhere', { workspace_id: 'wZ', agent: 'claude' }),
+  ];
+  assert.equal(seedCwd(panes, 'w0', new Map()), '/repos/e-avize');
+});
+
+test('shells are read only when the space has no agent at all', () => {
+  const shells = [paneAt('p1', '/repos/a'), paneAt('p2', '/repos/a')];
+  assert.equal(seedCwd(shells, 'w0', new Map()), '/repos/a');
+  const withAgent = [...shells, paneAt('p3', '/repos/b', { agent: 'claude' })];
+  assert.equal(seedCwd(withAgent, 'w0', new Map()), '/repos/b');
+});
+
+test('our own instruments never vote', () => {
+  // The usage agent runs in ~/.harness, which is nobody's repo, and both it and
+  // an aside are parked in a space that did not ask for them.
+  const names = new Map([['p2', 'harness-usage'], ['p3', 'aside-w0-ph']]);
+  const panes = [
+    paneAt('p1', '/repos/a', { agent: 'claude' }),
+    paneAt('p2', '/home/x/.harness', { agent: 'claude' }),
+    paneAt('p3', '/repos/a', { agent: 'claude' }),
+  ];
+  assert.equal(seedCwd(panes, 'w0', names), '/repos/a');
+  // With nothing but an instrument, the fallback must not reach it either.
+  assert.equal(seedCwd([panes[1]], 'w0', names), null);
+});
+
+test('A TIE SEEDS NOTHING — listing order is not evidence', () => {
+  const panes = [
+    paneAt('p1', '/repos/a', { agent: 'claude' }),
+    paneAt('p2', '/repos/b', { agent: 'claude' }),
+  ];
+  assert.equal(seedCwd(panes, 'w0', new Map()), null);
+  assert.equal(seedCwd([...panes].reverse(), 'w0', new Map()), null);
+});
+
+test('a space with no panes of its own has no directory', () => {
+  assert.equal(seedCwd([], 'w0', new Map()), null);
+  assert.equal(seedCwd([paneAt('q1', '/repos/a', { workspace_id: 'wZ' })], 'w0', new Map()), null);
 });

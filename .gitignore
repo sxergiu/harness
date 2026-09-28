@@ -2,6 +2,7 @@ node_modules/
 dist/
 *.log
 .DS_Store
+.idea/
 
 # Per-machine permission grants, written by Claude Code as you approve things.
 # It accumulates absolute scratchpad paths, session uuids and the names of

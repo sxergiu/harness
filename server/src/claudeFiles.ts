@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -16,6 +16,11 @@ import type { ClaudeFileState } from '@harness/shared';
  * command files that whole surface is inert.
  *
  * So they ship, and `harness init` puts them where Claude Code looks.
+ *
+ * Every file of Claude Code's OWN that this process reads or writes lives here
+ * too — the trust grant in `~/.claude.json`, and `~/.claude/settings.json`,
+ * which is read for the model in force and written only to put back what a
+ * per-agent switch overwrote.
  */
 
 /**
@@ -142,6 +147,173 @@ export function trustFolder(dir: string): void {
     renameSync(tmp, path);
   } catch {
     // Falls back to the dialog, which is where this started.
+  }
+}
+
+// ---------------------------------------------------------------------------
+// ~/.claude/settings.json
+// ---------------------------------------------------------------------------
+
+const SETTINGS = join(homedir(), '.claude', 'settings.json');
+
+/** mtime of the settings we last parsed, so this is one stat per resync. */
+let settingsAt = -1;
+let settingsAlias: string | null = null;
+let settingsEffort: string | null = null;
+
+/**
+ * Both halves of `~/.claude/settings.json` the cockpit reads, parsed together
+ * against one mtime — a second reader would be a second stat for a file this is
+ * already holding open.
+ */
+function readSettings(): void {
+  try {
+    const { mtimeMs } = statSync(SETTINGS);
+    if (mtimeMs === settingsAt) return;
+    settingsAt = mtimeMs;
+    const s = JSON.parse(readFileSync(SETTINGS, 'utf8')) as { model?: unknown; effortLevel?: unknown };
+    settingsAlias = typeof s.model === 'string' ? s.model : null;
+    settingsEffort = typeof s.effortLevel === 'string' ? s.effortLevel : null;
+  } catch {
+    // No settings file, or one we cannot parse — no alias, and `windowFor`
+    // answers the smaller window, which is the safe read for the same reason.
+  }
+}
+
+/**
+ * The model `~/.claude/settings.json` names — the alias in force for anything
+ * the cockpit did not start with a `--model` of its own, and the file a live
+ * `/model` rewrites.
+ */
+export function configuredAlias(): string | null {
+  readSettings();
+  return settingsAlias;
+}
+
+/**
+ * The effort in force, under `effortLevel` rather than `effort`. This is the
+ * whole of the cockpit's effort default: agents start with no `--effort`, so
+ * what this file says is what they run at.
+ */
+export function configuredEffort(): string | null {
+  readSettings();
+  return settingsEffort;
+}
+
+/** The two keys a per-agent switch moves, and the only ones ever written here. */
+export type SettingKey = 'model' | 'effortLevel';
+
+export interface Hold {
+  /** What the switch is about to write — and so the signal that it has landed. */
+  want: string;
+  /** What the key held before the FIRST switch; null when it held nothing. */
+  restoreTo: string | null;
+  expires: number;
+}
+
+/**
+ * How long a switch may take to land. A `/model` at a busy agent queues behind
+ * the current turn, so this is a turn's worth of patience and not a round trip.
+ */
+export const HOLD_MS = 10 * 60_000;
+
+const held = new Map<SettingKey, Hold>();
+
+/**
+ * Hold the machine-wide default still across a switch of ONE agent.
+ *
+ * `/model` and `/effort` are not per-agent: Claude Code sets the session and
+ * writes the alias to `~/.claude/settings.json` as the default for new sessions
+ * — measured against v2.1.220, where both commands reach the same user-settings
+ * writer whenever the session is interactive, which a Herdr pane always is. So
+ * the switch is sent, the write is allowed to land, and the key is then put
+ * back to what it said before.
+ *
+ * Keyed on the SETTING rather than on the pane: two agents switched at once are
+ * two writes to one key, and the second must still restore what the FIRST one
+ * found — restoring to the value the second switch saw would leave the first
+ * agent's alias standing as the machine default, which is the whole bug.
+ *
+ * A switch to what the file already says has nothing to defend and takes no
+ * hold, which also keeps `settleHolds` from writing a value back over itself.
+ */
+export function hold(key: SettingKey, want: string, restoreTo: string | null): void {
+  const next = holdFor(held.get(key), want, restoreTo, Date.now());
+  if (next !== null) held.set(key, next);
+}
+
+/** Split out pure for `settleAction`'s reason: it fails the same way, silently. */
+export function holdFor(
+  open: Hold | undefined, want: string, restoreTo: string | null, now: number,
+): Hold | null {
+  if (want === restoreTo) return null;
+  return { want, restoreTo: open ? open.restoreTo : restoreTo, expires: now + HOLD_MS };
+}
+
+/**
+ * Whether the write we are waiting on has landed yet. Pure, because all three
+ * answers look identical on screen: restoring too early leaves the switch's own
+ * value standing as the default a moment later, and never restoring at all is
+ * indistinguishable from a cockpit that never tried.
+ */
+export function settleAction(
+  current: string | null, hold: Hold, now: number,
+): 'wait' | 'restore' | 'give-up' {
+  if (current === hold.want) return 'restore';
+  return now >= hold.expires ? 'give-up' : 'wait';
+}
+
+/**
+ * Put back whatever a landed switch overwrote. Called from the board's resync
+ * rather than from a timer of its own: that heartbeat already runs every few
+ * seconds and already reads this file, there is nothing to cancel at shutdown
+ * or when a second switch arrives, and a `/model` that sat queued behind a long
+ * turn is still caught whenever it finally runs. Restoring on a fixed delay is
+ * the trap — it fires before the CLI's write and leaves the file moved anyway.
+ *
+ * In memory, so a harness restarted inside the window leaves the default moved.
+ * That is what happened before any of this existed, and it is the same reason
+ * `stateSince` is legitimately empty after a restart.
+ */
+export function settleHolds(): void {
+  if (held.size === 0) return;
+  readSettings();
+  const now = Date.now();
+  for (const [key, hold] of held) {
+    const current = key === 'model' ? settingsAlias : settingsEffort;
+    const action = settleAction(current, hold, now);
+    if (action === 'wait') continue;
+    if (action === 'restore') writeSetting(key, hold.restoreTo);
+    held.delete(key);
+  }
+}
+
+/**
+ * One key of Claude Code's own settings, left exactly as `trustFolder` leaves
+ * `~/.claude.json`. Re-read immediately before writing and only the one key
+ * touched, so everything a running agent changed meanwhile survives — this file
+ * is live-written by every one of them.
+ *
+ * The MODE is carried across, which writing through a temp file is exactly how
+ * you lose: measured at 0600 on this machine, and a fresh temp file renamed
+ * over it would publish a file the human had kept private, saying nothing.
+ *
+ * Best-effort: a failure costs the default its hold, never the switch that was
+ * already sent.
+ */
+function writeSetting(key: SettingKey, value: string | null): void {
+  try {
+    const settings = JSON.parse(readFileSync(SETTINGS, 'utf8')) as Record<string, unknown>;
+    if (value === null) delete settings[key];
+    else settings[key] = value;
+
+    const tmp = `${SETTINGS}.harness-${process.pid}`;
+    writeFileSync(tmp, `${JSON.stringify(settings, null, 2)}\n`, { mode: statSync(SETTINGS).mode });
+    renameSync(tmp, SETTINGS);
+    settingsAt = -1; // our own write, so the next read must not trust the mtime
+  } catch {
+    // The default stays where the switch put it, which is where it stood before
+    // any of this existed.
   }
 }
 

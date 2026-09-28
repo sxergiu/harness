@@ -1087,4 +1087,10 @@ rendered in a browser.
 
 The repo is committed and pushed to `github.com/sxergiu/harness`, which is now public — so
 the three links the package ships resolve for everyone rather than only for the owner, whose
-session resolved them either way. The human makes every commit.
+session resolved them either way.
+
+**The human makes every commit, EXCEPT where a checkout delegates git** — the cockpit's own
+agent rules carry that exception and scope it to the checkout granting it. Read the grant for
+what it says: it hands over the typing. It does not hand over the release process
+[RELEASING.md](RELEASING.md) describes, and 0.3.0 went out as one unreviewed commit because
+those two were read as one thing.

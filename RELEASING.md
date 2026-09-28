@@ -178,10 +178,12 @@ the exact tree the tag will point at, rather than after the fact.
 It touches exactly four things:
 
 1. **`package.json`** — `version`.
-2. **`package-lock.json`** — same version, via `npm install --package-lock-only`. This is
-   drifting right now: the lock says `0.2.0` while `package.json` says `0.3.0`, and 0.2.1 and
-   0.2.2 never updated it either. `npm ci` does not check the root version, so it fails
-   silently and forever.
+2. **`package-lock.json`** — same version, via `npm install --package-lock-only`. It had drifted
+   to `0.2.0` against a manifest at `0.3.0` before 0.3.0 put it back: 0.2.1 and 0.2.2 both moved
+   the manifest and neither moved the lock. **`npm ci` does not check the root version**, so
+   nothing anywhere reports this — do not expect a gate to catch it for you. Regenerating also
+   drops whatever the lock is still carrying from an older manifest; in 0.3.0 that was an
+   `os: ["darwin"]` block two releases after the field itself was removed.
 3. **`releases/<version>.md`** — the notes. One file per release, holding only what is new in
    that one.
 4. **`CHANGELOG.md`** — one new row in the index table, linking to that file. The index is
@@ -199,13 +201,20 @@ work:
   most useful part of the file.
 - Say when production was never affected, plainly, rather than letting a fix imply an outage.
 
-### One thing to fix in the next release commit
+### npm packs the working directory, so `git status` is the check
 
-**`releases/` has never been committed.** Not ignored — untracked, all six files, since the
-split out of `CHANGELOG.md`. So every link in the changelog index is a 404 on GitHub for
-everyone, and the files reach npm only because `npm publish` packs the working directory. The
-next release commit must add the back-filled `0.1.0`–`0.2.2` notes along with its own, or the
-index keeps pointing at nothing.
+Fixed in 0.3.0, which committed the back-filled `0.1.0`–`0.2.2` notes along with its own. It is
+kept here because the thing that hid it is still true of every file added from now on.
+
+**`releases/` had never been committed** — not ignored, just untracked, all six files, from the
+split out of `CHANGELOG.md` until 0.3.0. Every link in the changelog index was a 404 on GitHub
+for everyone, for five releases, while the notes themselves shipped to npm perfectly: `npm
+publish` packs the working directory, not the index. So a file can be present in the tarball
+and absent from the repository at the same time, and **inspecting the published package is
+exactly the check that cannot see it**.
+
+`git status` before the release commit is what catches it. `npm pack --dry-run` is not — it was
+green throughout.
 
 ## 6. Release branch, tag, GitHub release
 
@@ -245,6 +254,7 @@ After it lands, `npm view @sxergiu/harness version` is the confirmation.
 
 ```
 [ ] release split into a list of features and fixes, posted, corrected
+[ ] work already in the tree? asked before committing, never split it alone
 [ ] each item on feat/<slug>, >=3 commits (1-2 only for a genuinely small fix)
 [ ] new test files named in the `test` script
 [ ] four gates green locally on every branch
@@ -252,7 +262,7 @@ After it lands, `npm view @sxergiu/harness version` is the confirmation.
 [ ] squash-merged into master with (#N)
 [ ] stale feat/* branches deleted, local and remote
 [ ] release commit: package.json, package-lock.json, releases/<v>.md, CHANGELOG.md row
-[ ] releases/ actually tracked by git
+[ ] git status clean — nothing shipping to npm that is untracked here
 [ ] Actions green on the release commit
 [ ] harness-<v> branch + v<v> tag pushed
 [ ] GitHub release v<v>, body = releases/<v>.md

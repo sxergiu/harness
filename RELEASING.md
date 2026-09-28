@@ -47,6 +47,25 @@ three.
 Post the list before you start. It is the thing the human corrects cheaply, and the branch
 names come straight off it.
 
+### When the work is already there, STOP AND ASK
+
+The case above assumes you start before the code does. Sometimes you do not: you arrive and
+the release is already sitting in the tree as one undifferentiated pile of modified files,
+with no branches and nothing committed. That is not an exemption from the split. It is the
+moment to stop, say so, and ask — because collapsing it into one commit and splitting it into
+the items it is made of are materially different work, and which one happens is the human's
+call.
+
+The split is usually still available at that point, and cheaper than it looks: `releases/<v>.md`
+is written per item, so the notes already name them. 0.3.0's notes named seven — three features
+and four fixes, each with its own `##` section — and it still went to `master` as a single
+1,576-line commit, because the deviation was noticed and *reported* rather than raised.
+
+**Noticing is not asking, and this is the tell.** If you find yourself about to write a line
+like *"this is one commit rather than the per-item PRs RELEASING.md describes"* into a summary,
+you are describing a decision you already took alone and are now disclosing. Stop there. That
+sentence belongs in a question asked before the commit, never in a report written after it.
+
 ## 2. One branch per item
 
 ```

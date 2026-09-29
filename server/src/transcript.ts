@@ -3,7 +3,7 @@ import {
 } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, isAbsolute, join, relative, sep } from 'node:path';
-import type { AgentStatus, ContextUse, FeedEntry, FeedTurn, SubagentRow } from '@harness/shared';
+import { aliasRuns, type AgentStatus, type ContextUse, type FeedEntry, type FeedTurn, type SubagentRow } from '@harness/shared';
 import { configuredAlias } from './claudeFiles.js';
 import { sqlOf } from './sql.js';
 
@@ -314,8 +314,7 @@ export function contextOf(entries: Entry[], known: string | null): ContextUse | 
  */
 export function windowFor(model: string | null, alias: string | null): number {
   if (alias === null || !alias.includes('[1m]')) return WINDOW;
-  const family = alias.replace('[1m]', '');
-  return model === null || model.includes(family) ? WINDOW_1M : WINDOW;
+  return aliasRuns(alias, model) ? WINDOW_1M : WINDOW;
 }
 
 /** The newest tool call, as a line you can read at a glance. */

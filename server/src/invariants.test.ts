@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { test } from 'node:test';
-import { sameAccount } from '@harness/shared';
+import { aliasRuns, sameAccount } from '@harness/shared';
 import { parse as parseAccounts, rowFor, statusOf } from './account.js';
 import { seedCwd } from './board.js';
 import { HOLD_MS, decide, holdFor, settleAction } from './claudeFiles.js';
@@ -436,6 +436,22 @@ test('the 1M window is refused to a session not on that model', () => {
   // Nothing read yet leaves the alias standing alone, as it did before there
   // was anything to check it against.
   assert.equal(windowFor(null, 'opus[1m]'), 1_000_000);
+});
+
+test('an alias names a family, and a switch is unlanded until a request is of it', () => {
+  // The header reads this for what `windowFor` short-circuits past — a non-1M
+  // alias, which never reaches the family test through the window at all. It
+  // answers whether a `/model` has reached a request yet, and both wrong answers
+  // are silent: a switch that reads as landed the instant it is asked for, or an
+  // arrow that never clears from an agent plainly running what was picked.
+  assert.equal(aliasRuns('opus', 'claude-opus-5'), true);
+  assert.equal(aliasRuns('opus[1m]', 'claude-opus-5'), true);
+  assert.equal(aliasRuns('sonnet', 'claude-opus-5'), false);
+  // A real haiku id is dated, so the family is a substring of it and not an
+  // equality — measured `claude-haiku-4-5-20251001`.
+  assert.equal(aliasRuns('haiku', 'claude-haiku-4-5-20251001'), true);
+  // Nothing measured contradicts the alias, so a fresh agent is not mid-switch.
+  assert.equal(aliasRuns('sonnet', null), true);
 });
 
 test('the window follows what is KNOWN of the pane, and the family check binds it too', () => {

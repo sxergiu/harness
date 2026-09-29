@@ -189,8 +189,25 @@ export class Board {
     return arrange([...this.rows.values()].sort(compare), this.locks).map((row) => {
       const shade = this.shades.get(row.paneId) ?? null;
       const locked = this.locks.has(row.paneId);
-      return shade === null && !locked ? row : { ...row, shade, locked };
+      const alias = this.aliasFor(row.paneId);
+      return shade === null && !locked && alias === null
+        ? row
+        : { ...row, shade, locked, alias };
     });
+  }
+
+  /**
+   * What this pane was asked to run on: the switch it was sent, else the
+   * `--model` we started it with, else nothing — an agent started by hand, about
+   * which only the settings file speaks and only about every agent at once.
+   *
+   * One expression with two readers, the header's label and `contextOf`'s window,
+   * because they are two readings of one fact: a name and a window that resolved
+   * the chain differently would disagree on screen about the same switch, which
+   * is the shape of the bug that put this here.
+   */
+  private aliasFor(paneId: string): string | null {
+    return this.switchedTo.get(paneId) ?? this.startedBy.get(paneId) ?? null;
   }
 
   recent(): AgentRow[] {
@@ -255,12 +272,15 @@ export class Board {
   }
 
   /**
-   * Records what one agent was switched to. No `onChange`: nothing on the wire
-   * carries it, and the window it picks only moves once the agent's next
-   * request is in the transcript, which the heartbeat is already watching for.
+   * Records what one agent was switched to, and broadcasts — the row carries the
+   * alias now (`AgentRow.alias`), and this is the whole of what the header has to
+   * say that a switch was asked for. `agents()` reads it off the map on the way
+   * out, so the cached rows a broadcast sends already hold it and no snapshot is
+   * needed for the click to land on screen.
    */
   switched(paneId: string, alias: string): void {
     this.switchedTo.set(paneId, alias);
+    this.onChange();
   }
 
   /**
@@ -436,21 +456,18 @@ export class Board {
         error: errorOf(entries),
         model: modelOf(entries),
         effort: effortOf(entries),
-        // Most specific fact about THIS pane first: what it was switched to,
-        // else what we started it with. Neither known leaves `contextOf` to
-        // the machine default, which is all there is to say about an agent
-        // somebody started by hand.
-        context: contextOf(
-          entries,
-          this.switchedTo.get(p.pane_id) ?? this.startedBy.get(p.pane_id) ?? null,
-        ),
+        // Most specific fact about THIS pane first, else the machine default —
+        // see `aliasFor`. Neither known leaves `contextOf` to the settings file,
+        // which is all there is to say about an agent somebody started by hand.
+        context: contextOf(entries, this.aliasFor(p.pane_id)),
         fileCount: paths.length,
         contendedWith: [],
         aside: fork ?? (this.forked.has(p.pane_id) ? 'cleared' : null),
-        // Never set here: `agents()` is the author, so neither can ride a
-        // remembered row onto disk.
+        // Never set here: `agents()` is the author, so none of the three can
+        // ride a remembered row onto disk against a pane id Herdr recycles.
         shade: null,
         locked: false,
+        alias: null,
         live: true,
       };
 

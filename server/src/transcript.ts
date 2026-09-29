@@ -284,6 +284,29 @@ export function effortOf(entries: Entry[]): string | null {
 }
 
 /**
+ * The same evidence rule as `aliasDisproven`, over the level instead of the
+ * model — whether a request that ran AFTER `since` ran at something other than
+ * `level`, which is the only thing that can answer an ask nothing else observes.
+ *
+ * A level is falsified by MORE than an alias is, and the extra way is the whole
+ * reason this cannot be `aliasDisproven`'s twin: Claude Code CAPS the level at
+ * the model's own ceiling and records the capped value, so `max` asked of a
+ * model that stops at `high` comes back `high` and the cap is the truth. A model
+ * with no level at all records NONE — measured on `claude-haiku-4-5` — and that
+ * absence is itself a measurement, not a silence, which is why a missing
+ * `effort` disproves here where a missing `model` proves nothing there.
+ *
+ * `since` carries the same ordering rule and for the same reason: the request
+ * before an ask is at the old level by definition.
+ */
+export function effortDisproven(entries: Entry[], level: string, since: number): boolean {
+  const e = lastRequest(entries);
+  const at = Date.parse(e?.timestamp ?? '');
+  if (!e || !Number.isFinite(at)) return false;
+  return at > since && (e.effort ?? null) !== level;
+}
+
+/**
  * Context held by the agent's newest request, and the window it is held against.
  *
  * The tokens are exact and need no interpretation: input + cache_read +

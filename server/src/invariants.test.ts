@@ -17,7 +17,7 @@ import { admits, isLocal } from './origin.js';
 import { parse } from './projects.js';
 import { argsFor, modelFrom, rulesFor } from './rules.js';
 import {
-  aliasDisproven, contextOf, effortOf, goalOf, modelOf, slugForCwd, windowFor, type Entry,
+  aliasDisproven, contextOf, effortDisproven, effortOf, goalOf, modelOf, slugForCwd, windowFor, type Entry,
 } from './transcript.js';
 import { cropPanel, limitsOf } from './usage.js';
 
@@ -425,6 +425,34 @@ test('the effort is read off the same request as the model, never an older one',
   ];
   assert.equal(effortOf(entries), null);
   assert.equal(effortOf(entries.slice(0, 1)), 'high');
+});
+
+test('a level asked for is answered by the cap as surely as by a refusal', () => {
+  const at = (iso: string, effort?: string): Entry =>
+    ({ type: 'assistant', timestamp: iso, effort, message: { model: 'claude-opus-5' } });
+  const asked = Date.parse('2026-09-29T12:00:00.000Z');
+
+  // Same ordering rule as the alias: the request before the ask is at the old
+  // level by definition, and reading it as evidence would drop every switch the
+  // instant it was made.
+  assert.equal(effortDisproven([at('2026-09-29T11:59:59.000Z', 'high')], 'max', asked), false);
+  // The ask honoured.
+  assert.equal(effortDisproven([at('2026-09-29T12:00:01.000Z', 'max')], 'max', asked), false);
+  // Claude Code CAPS the level at the model's ceiling and records what it
+  // allowed. That is an answer, not a disagreement to argue with — left
+  // standing, the header would report a level no request has ever run at.
+  assert.equal(effortDisproven([at('2026-09-29T12:00:01.000Z', 'high')], 'max', asked), true);
+  // ABSENCE IS THE MEASUREMENT, which is the one place this parts company with
+  // `aliasDisproven`: a model with no effort level records none, so a request
+  // carrying nothing says the level is gone rather than saying nothing at all.
+  assert.equal(effortDisproven([at('2026-09-29T12:00:01.000Z')], 'high', asked), true);
+  // Nothing to check against still proves nothing — a fresh session, a pruned
+  // transcript, an entry with no usable timestamp.
+  assert.equal(effortDisproven([], 'high', asked), false);
+  assert.equal(
+    effortDisproven([{ type: 'assistant', message: { model: 'claude-opus-5' } }], 'high', asked),
+    false,
+  );
 });
 
 test('the 1M window is refused to a session not on that model', () => {

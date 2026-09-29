@@ -11,7 +11,7 @@ import type { History } from './history.js';
 import { notify } from './notify.js';
 import type { Projects } from './projects.js';
 import {
-  Transcripts, activityOf, aliasDisproven, assignmentOf, contextOf, effortOf, errorOf, goalOf, modelOf, todoOf, transcriptPathFor, type Entry,
+  Transcripts, activityOf, aliasDisproven, assignmentOf, contextOf, effortDisproven, effortOf, errorOf, goalOf, modelOf, todoOf, transcriptPathFor, type Entry,
 } from './transcript.js';
 import { USAGE_AGENT } from './usage.js';
 
@@ -43,11 +43,12 @@ const HEARTBEAT_MS = 3000;
 const GENERIC_TITLE = /^claude code$/i;
 
 /**
- * What a pane was asked to run, and when it was asked — the pair, because the
- * alias on its own cannot be checked against anything. See `switchedTo`.
+ * What a pane was asked to run — a model alias or an effort level — and when it
+ * was asked. The pair, because the value on its own cannot be checked against
+ * anything. See `switchedTo`, and `settleClaims` for what answers one.
  */
 interface Claim {
-  alias: string;
+  value: string;
   at: number;
 }
 
@@ -142,6 +143,27 @@ export class Board {
    */
   private startedBy = new Map<string, Claim>();
 
+  /**
+   * paneId → the effort level it was switched to from its header, on the same
+   * terms as `switchedTo` above: a claim with the time it was made, reported as
+   * the level in force until one of the pane's own requests contradicts it
+   * (`effortDisproven`).
+   *
+   * It exists for the reason the alias does — a `/effort` at a busy agent queues
+   * behind the whole turn, so without this a click moved nothing on screen until
+   * the agent next worked. There is no launch twin: no `--effort` is passed, so
+   * the settings file is all there is to say about a level nobody switched, and
+   * that is a claim about every agent rather than this one.
+   *
+   * It is answered MORE often than an alias is, which is the point rather than a
+   * cost: Claude Code caps the level at the model's ceiling, so an `xhigh` asked
+   * of a model that stops at `high` stands for one request and is then replaced
+   * by what actually ran.
+   *
+   * In memory and dropped with the pane, exactly as the other two are.
+   */
+  private effortSwitchedTo = new Map<string, Claim>();
+
   constructor(
     private readonly herdr: Herdr,
     private readonly history: History,
@@ -207,9 +229,15 @@ export class Board {
       const shade = this.shades.get(row.paneId) ?? null;
       const locked = this.locks.has(row.paneId);
       const alias = this.aliasFor(row.paneId);
-      return shade === null && !locked && alias === null
+      // An unrefuted ask outranks the last request, which is the older of the
+      // two facts. Resolved here rather than carried beside the measurement the
+      // way `alias` is, because the two speak one vocabulary: `high` is `high`
+      // whichever of them said it, so a second field would only give the browser
+      // something to disagree with itself about.
+      const effort = this.effortFor(row.paneId) ?? row.effort;
+      return shade === null && !locked && alias === null && effort === row.effort
         ? row
-        : { ...row, shade, locked, alias };
+        : { ...row, shade, locked, alias, effort };
     });
   }
 
@@ -229,7 +257,20 @@ export class Board {
    * `settleClaims`, which runs first on every resync.
    */
   private aliasFor(paneId: string): string | null {
-    return (this.switchedTo.get(paneId) ?? this.startedBy.get(paneId))?.alias ?? null;
+    return (this.switchedTo.get(paneId) ?? this.startedBy.get(paneId))?.value ?? null;
+  }
+
+  /**
+   * What this pane is running AT, as far as anything here was told: the level it
+   * was switched to, else nothing — which leaves the transcript to answer, as it
+   * did before there was anything to ask.
+   *
+   * One entry rather than the alias's chain, because no start passes an
+   * `--effort`; and unrefuted for the alias's reason, so that what it says is
+   * the level in force rather than one that was once chosen.
+   */
+  private effortFor(paneId: string): string | null {
+    return this.effortSwitchedTo.get(paneId)?.value ?? null;
   }
 
   /**
@@ -246,11 +287,20 @@ export class Board {
    * rather than both against whichever won the chain: a disproven switch must
    * uncover the `--model` the pane still carries, and settling only the winner
    * would leave the loser underneath it untested and make it the answer.
+   *
+   * The level is settled by its own rule (`effortDisproven`) and not by the
+   * model's: a cap the CLI applies answers an ask as surely as a refusal does,
+   * and a model with no level records none, so absence is evidence here where it
+   * is silence there.
    */
   private settleClaims(paneId: string, entries: Entry[]): void {
     for (const map of [this.switchedTo, this.startedBy]) {
       const claim = map.get(paneId);
-      if (claim && aliasDisproven(entries, claim.alias, claim.at)) map.delete(paneId);
+      if (claim && aliasDisproven(entries, claim.value, claim.at)) map.delete(paneId);
+    }
+    const level = this.effortSwitchedTo.get(paneId);
+    if (level && effortDisproven(entries, level.value, level.at)) {
+      this.effortSwitchedTo.delete(paneId);
     }
   }
 
@@ -323,7 +373,13 @@ export class Board {
    * needed for the click to land on screen.
    */
   switched(paneId: string, alias: string): void {
-    this.switchedTo.set(paneId, { alias, at: Date.now() });
+    this.switchedTo.set(paneId, { value: alias, at: Date.now() });
+    this.onChange();
+  }
+
+  /** The same record, and the same broadcast, for a level. */
+  switchedEffort(paneId: string, level: string): void {
+    this.effortSwitchedTo.set(paneId, { value: level, at: Date.now() });
     this.onChange();
   }
 
@@ -333,7 +389,7 @@ export class Board {
    * which is the one place that knows the flag went with it.
    */
   startedOn(paneId: string, alias: string): void {
-    this.startedBy.set(paneId, { alias, at: Date.now() });
+    this.startedBy.set(paneId, { value: alias, at: Date.now() });
   }
 
   /** Tints one row, or clears it with `null`. */
@@ -544,12 +600,13 @@ export class Board {
       this.history.remember(old);
       // Herdr recycles pane ids, so a trace kept past the pane it describes
       // would put a fork on whatever agent inherits the id next — and equally a
-      // shade, a dead agent's hold on a slot, or its model.
+      // shade, a dead agent's hold on a slot, or its model and level.
       this.forked.delete(paneId);
       this.shades.delete(paneId);
       this.locks.delete(paneId);
       this.switchedTo.delete(paneId);
       this.startedBy.delete(paneId);
+      this.effortSwitchedTo.delete(paneId);
       forgetChromeDialog(paneId);
       this.onSessionGone(paneId);
       if (this.started) {

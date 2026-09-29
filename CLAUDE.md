@@ -778,6 +778,24 @@ foot of the board because that is where the bars that prompt it are.
   pinned separately, as is the ordering rule. What survives none of this is Claude Code's own
   `Switch model?` confirm: until the human answers it in the pane, the label reads as the
   switch they asked for.
+  **THE LEVEL IS A CLAIM ON THE SAME TERMS, and its disproof is a DIFFERENT RULE.** A
+  `/effort` queues behind the whole turn exactly as a `/model` does, so reading it off the
+  transcript alone left the header answering with a request made before the click — the
+  picker-did-nothing bug, at the other half of the same popover. `effortSwitchedTo` records
+  what was asked and `settleClaims` drops it when a later request disagrees, pane-keyed and
+  in memory like the two above. But `effortDisproven` is not `aliasDisproven` over a
+  different field: Claude Code CAPS the level at the model's ceiling and records what it
+  allowed, so an `xhigh` that comes back `high` was ANSWERED rather than refused, and a
+  model with no level records NONE — which makes absence the measurement here where it is
+  silence there. Both differences drop the claim, and both are right to: what stands after
+  is what actually ran. There is no launch twin, since no `--effort` is passed.
+  **It is RESOLVED into `AgentRow.effort` rather than carried beside it**, which is the one
+  place this deliberately parts from the model. `alias` travels next to `model` because it
+  states two things a transcript cannot — `[1m]`, and the family before a request has run —
+  so the browser needs both to compute one reading. A level asked and a level measured are
+  the same five words, so a second field would only be a second opinion to weigh; `agents()`
+  applies the claim on the way out, beside the shade and the lock and for their reason, and
+  RECENT keeps the measured value by construction.
 - **The Tailwind ramp IS the theme, and light mode is one CSS block.** Every colour class
   resolves to `var(--color-*)` — verified in the compiled output, including opacity
   modifiers, which become `color-mix(in oklab, var(--color-teal-700) 35%, …)` inside an

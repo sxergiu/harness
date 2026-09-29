@@ -471,8 +471,11 @@ app.post<{ Params: { paneId: string }; Body: { alias?: string } }>(
  *
  * `max` takes no hold: it is session-scoped in the CLI, which writes nothing
  * for it, so there is nothing about to move and a hold would wait out its whole
- * expiry for a write that never comes. No pane memory either — the level is
- * read back off the transcript, where the model needs an alias nothing records.
+ * expiry for a write that never comes.
+ *
+ * The level is also remembered against the pane, for the alias's reason: a
+ * `/effort` queues behind the whole turn at a busy agent, so until this the
+ * header answered with the level of a request made before the click.
  */
 app.post<{ Params: { paneId: string }; Body: { level?: string } }>(
   '/api/agents/:paneId/effort',
@@ -483,6 +486,7 @@ app.post<{ Params: { paneId: string }; Body: { level?: string } }>(
     }
     return act(reply, async () => {
       if (level !== 'max') hold('effortLevel', level, configuredEffort());
+      board.switchedEffort(req.params.paneId, level);
       await herdr.prompt(req.params.paneId, `/effort ${level}`);
     });
   },

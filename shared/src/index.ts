@@ -61,8 +61,9 @@ export function aliasRuns(alias: string, model: string | null): boolean {
  *
  * Unlike an alias, a level is not honoured as asked. Claude Code CAPS it at the
  * model's own ceiling and writes the capped value, and a model with no effort at
- * all — measured on `claude-haiku-4-5` — records none. So what an agent runs at
- * is only ever read back off its transcript, never from what was chosen.
+ * all — measured on `claude-haiku-4-5` — records none. So a level that has been
+ * chosen stands only until the pane's next request, which either agrees with it
+ * or replaces it with what the cap allowed (`effortDisproven`).
  *
  * `max` is the one that does not persist: `/effort max` sets the session and
  * writes nothing to `~/.claude/settings.json`, where the other four are saved as
@@ -192,10 +193,19 @@ export interface AgentRow {
    */
   alias: string | null;
   /**
-   * What that same request ran at, off the same entry as `model` so the two
-   * always describe one request. Null is a real answer and not just an unread
-   * one: a model with no effort level records none, and reporting the level of
-   * an older request beside a newer model would be a claim about neither.
+   * What the pane is running AT: the level it was switched to while that ask
+   * stands unrefuted, else what its last request actually ran at — read off the
+   * same entry as `model`, so the pair always describes one request.
+   *
+   * Resolved server-side, where `model` and `alias` travel separately, and the
+   * asymmetry is deliberate: an alias states two things a transcript cannot
+   * (`[1m]`, and the family before a request has run), while a level asked and a
+   * level measured are the same five words. One field is therefore the whole
+   * answer, and a second would be a second opinion for the browser to weigh.
+   *
+   * Null is a real answer and not just an unread one: a model with no effort
+   * level records none, and reporting the level of an older request beside a
+   * newer model would be a claim about neither.
    */
   effort: string | null;
   /**

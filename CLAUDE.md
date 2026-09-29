@@ -755,6 +755,20 @@ foot of the board because that is where the bars that prompt it are.
   the meter falls back to the default and the peak-widening recovers the rest. `startArgs`
   therefore takes the alias from its caller rather than reading the file itself: two reads are
   free to disagree, and the pane would then be remembered as running what it was never given.
+  **The HEADER reads that same chain, and not reading it was a live bug.** The label was the
+  transcript's model alone, which is the one thing that cannot say `[1m]` — so switching
+  `opus[1m]` → `opus` changed nothing on screen ever, while the meter beside it silently
+  changed window, and any other switch changed nothing until the agent's next request, which
+  reads as a picker click that did nothing. `aliasFor` is now the one expression behind both,
+  because a name and a window resolving the same chain differently is two answers to one
+  question. It reaches the browser as `AgentRow.alias`, applied in `agents()` beside the shade
+  and the lock — pane-keyed, in memory, and so never on a remembered row. `modelReading`
+  renders the pair and keeps the two apart: the transcript stays the vocabulary, since an alias
+  is a REQUEST that the account may refuse and that `/model` queues behind a whole turn, and
+  the alias adds only what no transcript states — `1M`, and `→ sonnet` for one no request has
+  run on yet. An arrow that never clears is the only visible sign that an alias was turned down.
+  `aliasRuns` is in `shared` because both sides ask it of the same pair; the header's use of it
+  hits the non-1M case, which `windowFor` short-circuits past, so it is pinned separately.
 - **The Tailwind ramp IS the theme, and light mode is one CSS block.** Every colour class
   resolves to `var(--color-*)` — verified in the compiled output, including opacity
   modifiers, which become `color-mix(in oklab, var(--color-teal-700) 35%, …)` inside an

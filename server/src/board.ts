@@ -11,7 +11,7 @@ import type { History } from './history.js';
 import { notify } from './notify.js';
 import type { Projects } from './projects.js';
 import {
-  Transcripts, activityOf, assignmentOf, contextOf, effortOf, errorOf, goalOf, modelOf, todoOf, transcriptPathFor, type Entry,
+  Transcripts, activityOf, aliasDisproven, assignmentOf, contextOf, effortOf, errorOf, goalOf, modelOf, todoOf, transcriptPathFor, type Entry,
 } from './transcript.js';
 import { USAGE_AGENT } from './usage.js';
 
@@ -41,6 +41,15 @@ const HEARTBEAT_MS = 3000;
 
 /** Herdr's default title. Naming an agent after it would tell you nothing. */
 const GENERIC_TITLE = /^claude code$/i;
+
+/**
+ * What a pane was asked to run, and when it was asked — the pair, because the
+ * alias on its own cannot be checked against anything. See `switchedTo`.
+ */
+interface Claim {
+  alias: string;
+  at: number;
+}
 
 export class Board {
   private rows = new Map<string, AgentRow>();
@@ -94,15 +103,21 @@ export class Board {
    * paneId → the alias it was switched to from its header, which is the only
    * record that this agent is not on the machine default: the switch used to
    * leave one in `~/.claude/settings.json` and no longer does, since that file
-   * is put back afterwards (`hold`). Only `contextOf` reads it, to pick the
-   * window the transcript cannot name.
+   * is put back afterwards (`hold`). The header reads it as the model the pane is
+   * running, and `contextOf` reads it for the window the transcript cannot name.
+   *
+   * WITH THE TIME IT WAS ASKED, which is what makes it falsifiable: a refused
+   * alias, or a `/model` the human types in the pane, leaves this saying
+   * something the agent stopped doing, and only a request recorded after the ask
+   * can show that (`aliasDisproven`). Disproven, it is deleted rather than
+   * flagged — there is nothing left to say about a claim the agent has answered.
    *
    * In memory and dropped with the pane, for the shade's reason. After a
    * restart the meter falls back to the machine default and the peak-widening
    * recovers the rest, which is the safe direction: 200k over-reports how full
    * a session is rather than hiding it.
    */
-  private switchedTo = new Map<string, string>();
+  private switchedTo = new Map<string, Claim>();
 
   /**
    * paneId → the `--model` this cockpit actually started that pane with.
@@ -120,10 +135,12 @@ export class Board {
    * and mean something.
    *
    * In memory and dropped with the pane, exactly as `switchedTo` is and for the
-   * same reason. After a restart the meter falls back to the machine default
-   * and the peak-widening recovers the rest.
+   * same reason, and falsified the same way: what the flag said at launch is not
+   * what the session runs once somebody types `/model` in the pane. After a
+   * restart the meter falls back to the machine default and the peak-widening
+   * recovers the rest.
    */
-  private startedBy = new Map<string, string>();
+  private startedBy = new Map<string, Claim>();
 
   constructor(
     private readonly herdr: Herdr,
@@ -197,17 +214,44 @@ export class Board {
   }
 
   /**
-   * What this pane was asked to run on: the switch it was sent, else the
-   * `--model` we started it with, else nothing — an agent started by hand, about
-   * which only the settings file speaks and only about every agent at once.
+   * What this pane is running, as far as anything here was told: the switch it
+   * was sent, else the `--model` we started it with, else nothing — an agent
+   * started by hand, about which only the settings file speaks and only about
+   * every agent at once.
    *
    * One expression with two readers, the header's label and `contextOf`'s window,
    * because they are two readings of one fact: a name and a window that resolved
    * the chain differently would disagree on screen about the same switch, which
    * is the shape of the bug that put this here.
+   *
+   * Only ever an UNREFUTED claim, which is what lets the header state it as the
+   * current model rather than as something that was once asked for — see
+   * `settleClaims`, which runs first on every resync.
    */
   private aliasFor(paneId: string): string | null {
-    return this.switchedTo.get(paneId) ?? this.startedBy.get(paneId) ?? null;
+    return (this.switchedTo.get(paneId) ?? this.startedBy.get(paneId))?.alias ?? null;
+  }
+
+  /**
+   * Drops what this pane's own requests have contradicted, so that what is left
+   * describes now.
+   *
+   * Both maps hold what the pane was ASKED to run, and an ask is not an outcome:
+   * an alias the account lacks is refused in the pane with the agent carrying on
+   * unchanged, and a `/model` the human types there moves the session without
+   * telling this process anything. Either leaves a claim that would otherwise be
+   * reported as the current model for the life of the pane.
+   *
+   * The switch is settled against the SWITCH, and the launch against the launch,
+   * rather than both against whichever won the chain: a disproven switch must
+   * uncover the `--model` the pane still carries, and settling only the winner
+   * would leave the loser underneath it untested and make it the answer.
+   */
+  private settleClaims(paneId: string, entries: Entry[]): void {
+    for (const map of [this.switchedTo, this.startedBy]) {
+      const claim = map.get(paneId);
+      if (claim && aliasDisproven(entries, claim.alias, claim.at)) map.delete(paneId);
+    }
   }
 
   recent(): AgentRow[] {
@@ -279,7 +323,7 @@ export class Board {
    * needed for the click to land on screen.
    */
   switched(paneId: string, alias: string): void {
-    this.switchedTo.set(paneId, alias);
+    this.switchedTo.set(paneId, { alias, at: Date.now() });
     this.onChange();
   }
 
@@ -289,7 +333,7 @@ export class Board {
    * which is the one place that knows the flag went with it.
    */
   startedOn(paneId: string, alias: string): void {
-    this.startedBy.set(paneId, alias);
+    this.startedBy.set(paneId, { alias, at: Date.now() });
   }
 
   /** Tints one row, or clears it with `null`. */
@@ -408,6 +452,9 @@ export class Board {
       // transcript can be pruned out from under us.
       const transcriptPath = sessionUuid ? transcriptPathFor(p.cwd, sessionUuid) : null;
       const entries = transcriptPath ? this.transcripts.entries(transcriptPath) : [];
+      // Before anything reads an alias off this pane, in either of the two places
+      // that do.
+      this.settleClaims(p.pane_id, entries);
       const paths = touchedPaths(entries);
       // Counted twice, over the whole session and over the tail: the first is
       // the changelist, the second is what this assignment is answerable for.

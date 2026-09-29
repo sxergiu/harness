@@ -762,13 +762,22 @@ foot of the board because that is where the bars that prompt it are.
   reads as a picker click that did nothing. `aliasFor` is now the one expression behind both,
   because a name and a window resolving the same chain differently is two answers to one
   question. It reaches the browser as `AgentRow.alias`, applied in `agents()` beside the shade
-  and the lock — pane-keyed, in memory, and so never on a remembered row. `modelReading`
-  renders the pair and keeps the two apart: the transcript stays the vocabulary, since an alias
-  is a REQUEST that the account may refuse and that `/model` queues behind a whole turn, and
-  the alias adds only what no transcript states — `1M`, and `→ sonnet` for one no request has
-  run on yet. An arrow that never clears is the only visible sign that an alias was turned down.
-  `aliasRuns` is in `shared` because both sides ask it of the same pair; the header's use of it
-  hits the non-1M case, which `windowFor` short-circuits past, so it is pinned separately.
+  and the lock — pane-keyed, in memory, and so never on a remembered row.
+  **It says what the pane is running NOW, and never how it got there.** `modelReading` takes
+  the alias as the answer and lets the transcript refine it wherever a request of that family
+  has actually run, which is where the exact id and version come from; `opus-5 → sonnet` was
+  the first attempt and it was wrong, because a transition is not what you want off a board —
+  one state is. That only works because the alias is kept UNREFUTED: `aliasDisproven` drops it
+  the moment one of the pane's own requests contradicts it, which is what a refused alias and a
+  `/model` typed in the pane each amount to from here, and `settleClaims` tests the switch and
+  the launch SEPARATELY so a disproven switch uncovers the `--model` still under it. The
+  ordering is the whole of it — the request before an ask is of the old model by definition, so
+  comparing families alone calls every switch refused the instant it is made, which is the
+  reading this replaced. `aliasRuns` is in `shared` because both sides ask it of the same pair;
+  the header's use of it hits the non-1M case, which `windowFor` short-circuits past, so it is
+  pinned separately, as is the ordering rule. What survives none of this is Claude Code's own
+  `Switch model?` confirm: until the human answers it in the pane, the label reads as the
+  switch they asked for.
 - **The Tailwind ramp IS the theme, and light mode is one CSS block.** Every colour class
   resolves to `var(--color-*)` — verified in the compiled output, including opacity
   modifiers, which become `color-mix(in oklab, var(--color-teal-700) 35%, …)` inside an

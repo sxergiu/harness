@@ -17,7 +17,7 @@ import { admits, isLocal } from './origin.js';
 import { parse } from './projects.js';
 import { argsFor, modelFrom, rulesFor } from './rules.js';
 import {
-  contextOf, effortOf, goalOf, modelOf, slugForCwd, windowFor, type Entry,
+  aliasDisproven, contextOf, effortOf, goalOf, modelOf, slugForCwd, windowFor, type Entry,
 } from './transcript.js';
 import { cropPanel, limitsOf } from './usage.js';
 
@@ -438,12 +438,11 @@ test('the 1M window is refused to a session not on that model', () => {
   assert.equal(windowFor(null, 'opus[1m]'), 1_000_000);
 });
 
-test('an alias names a family, and a switch is unlanded until a request is of it', () => {
+test('an alias names a family, which is what refines a measured model', () => {
   // The header reads this for what `windowFor` short-circuits past — a non-1M
-  // alias, which never reaches the family test through the window at all. It
-  // answers whether a `/model` has reached a request yet, and both wrong answers
-  // are silent: a switch that reads as landed the instant it is asked for, or an
-  // arrow that never clears from an agent plainly running what was picked.
+  // alias, which never reaches the family test through the window at all. Both
+  // wrong answers are silent: a `1M` marker on a session that does not have one,
+  // or an exact model id shown for a family the pane is no longer running.
   assert.equal(aliasRuns('opus', 'claude-opus-5'), true);
   assert.equal(aliasRuns('opus[1m]', 'claude-opus-5'), true);
   assert.equal(aliasRuns('sonnet', 'claude-opus-5'), false);
@@ -452,6 +451,41 @@ test('an alias names a family, and a switch is unlanded until a request is of it
   assert.equal(aliasRuns('haiku', 'claude-haiku-4-5-20251001'), true);
   // Nothing measured contradicts the alias, so a fresh agent is not mid-switch.
   assert.equal(aliasRuns('sonnet', null), true);
+});
+
+test('ONLY A REQUEST AFTER THE ASK CAN DISPROVE IT, which is what makes the label current', () => {
+  const at = (iso: string, model: string): Entry =>
+    ({ type: 'assistant', timestamp: iso, message: { model } });
+  const asked = Date.parse('2026-09-29T12:00:00.000Z');
+
+  // The request BEFORE a switch is of the old model by definition. Reading it as
+  // evidence calls every switch refused the instant it is made, which puts the
+  // header back to showing the model the agent has just been moved off.
+  assert.equal(
+    aliasDisproven([at('2026-09-29T11:59:59.000Z', 'claude-opus-5')], 'sonnet', asked),
+    false,
+  );
+  // A request after it, on another family: the ask did not take — refused in the
+  // pane, or overridden by a `/model` typed there. Left standing, it would be
+  // reported as the current model for the life of the pane.
+  assert.equal(
+    aliasDisproven([at('2026-09-29T12:00:01.000Z', 'claude-opus-5')], 'sonnet', asked),
+    true,
+  );
+  // The ask honoured. `[1m]` is invisible in a transcript, so the family is all
+  // there is to agree with, and disagreeing here would drop the only record that
+  // the session has the wider window.
+  assert.equal(
+    aliasDisproven([at('2026-09-29T12:00:01.000Z', 'claude-opus-5')], 'opus[1m]', asked),
+    false,
+  );
+  // Nothing to check against proves nothing: a fresh session, a pruned
+  // transcript, an entry with no usable timestamp. The claim stands.
+  assert.equal(aliasDisproven([], 'sonnet', asked), false);
+  assert.equal(
+    aliasDisproven([{ type: 'assistant', message: { model: 'claude-opus-5' } }], 'sonnet', asked),
+    false,
+  );
 });
 
 test('the window follows what is KNOWN of the pane, and the family check binds it too', () => {

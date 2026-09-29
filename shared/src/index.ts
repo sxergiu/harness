@@ -176,13 +176,16 @@ export interface AgentRow {
    * about every agent rather than this one.
    *
    * A REQUEST and not a measurement, which is why it is carried beside `model`
-   * instead of replacing it: an alias the account has no access to is refused in
-   * the pane, and `/model` at a busy agent queues behind the whole turn. But it
-   * is the only thing that knows the two facts a transcript cannot state — that
-   * a session runs on the 1M window, and that a switch has been asked for and
-   * not yet reached a request. Without it a picker click moved nothing on screen
-   * at all until the agent next worked, and an `opus` ⇄ `opus[1m]` switch moved
-   * nothing ever.
+   * rather than replacing it — but an UNREFUTED one, so the header may state it as
+   * the model in force. The server drops it as soon as one of the pane's own
+   * requests contradicts it (`aliasDisproven`), which is what a refused alias and
+   * a `/model` typed in the pane both amount to from here.
+   *
+   * It is the only thing that knows what `model` cannot: that a session runs on
+   * the 1M window (`opus` and `opus[1m]` record the same id), and what a switch
+   * moved the pane to before a request has been worked on it. Without it a picker
+   * click moved nothing on screen until the agent next worked, and an
+   * `opus` ⇄ `opus[1m]` switch moved nothing ever.
    *
    * In memory against a pane id server-side, so it is applied on the way out
    * (`agents()`) like the shade and the lock, and RECENT never carries one.

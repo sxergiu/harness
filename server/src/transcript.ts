@@ -229,6 +229,34 @@ export function modelOf(entries: Entry[]): string | null {
 }
 
 /**
+ * Whether a request that ran AFTER `since` ran on something other than `alias` —
+ * which is the only evidence there is that a remembered alias has stopped being
+ * true of the pane.
+ *
+ * An alias is what the pane was ASKED to run: a `/model` from the header, or the
+ * `--model` a start passed. Two things quietly falsify one, and the header reads
+ * it as the current model, so neither may be allowed to stand:
+ *
+ * - an alias the account has no access to is REFUSED in the pane, and the agent
+ *   carries on running what it was;
+ * - a `/model` the human types in the pane themselves moves the session and tells
+ *   this process nothing.
+ *
+ * `since` is what makes this evidence rather than a coincidence. The request
+ * before a switch is of the old model by definition, so comparing families alone
+ * would call every switch refused the instant it was made, which is the reading
+ * this replaced. Only a request recorded after the ask can disprove it — and an
+ * unparseable or absent timestamp proves nothing, so the claim stands.
+ */
+export function aliasDisproven(entries: Entry[], alias: string, since: number): boolean {
+  const e = lastRequest(entries);
+  const model = e?.message?.model;
+  const at = Date.parse(e?.timestamp ?? '');
+  if (!model || !Number.isFinite(at)) return false;
+  return at > since && !aliasRuns(alias, model);
+}
+
+/**
  * The entry both readers answer from, so that what they say is of ONE request
  * by construction rather than by two loops agreeing. A filter that changed in
  * one and not the other would pair a model with an older request's effort, and

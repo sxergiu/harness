@@ -170,13 +170,14 @@ function CommandField(
  * an idle agent, the rest of the turn at a busy one — where the file does hold
  * this alias and an agent started by hand would inherit it.
  *
- * What the switch is READ BACK as is `AgentRow.alias` — the request, remembered
- * against the pane — and never more than that. Whether it took is only ever the
- * transcript's answer: a cross-family switch on an agent that has already worked
- * raises Claude Code's own `Switch model?` confirm, which the agent shows and the
- * human answers in the pane or the blocked panel, and an alias the account lacks
- * is refused there outright. So the label pairs the two (`modelReading`) rather
- * than letting either stand for the other.
+ * The label is **what the pane is running now**, from the alias and the transcript
+ * together — see `modelReading`. It is not a record of the switch: an alias the
+ * pane's own later requests contradict is dropped server-side, which is what a
+ * refused alias and a `/model` typed in the pane both look like from here. The one
+ * case neither signal covers is Claude Code's `Switch model?` confirm on a
+ * cross-family switch at an agent that has already worked — the agent shows it and
+ * the human answers it in the pane or the blocked panel, and until they do the
+ * label reads as the switch they asked for.
  */
 function ModelPicker(
   { agent, onPick, onEffort }: {
@@ -186,10 +187,9 @@ function ModelPicker(
   },
 ): React.ReactElement | null {
   const [open, setOpen] = useState(false);
-  // What it is running, and the alias it has been asked to run — see
-  // `modelReading`. An agent that has not answered yet has no reading and a
-  // pruned transcript never will, but either can still be asked to switch, so
-  // the control stays and only its label goes unknown.
+  // An agent that has neither been asked for a model nor answered a request has
+  // nothing to report, and a pruned transcript never will — but either can still
+  // be asked to switch, so the control stays and only its label goes unknown.
   const name = modelReading(agent.model, agent.alias);
   // Read off the same request as the model, so the pair never describes two.
   // Absent is a state of its own and reads as one: a model with no effort level
@@ -208,7 +208,7 @@ function ModelPicker(
       <button
         onClick={() => setOpen(!open)}
         className={open ? 'text-neutral-200' : 'text-neutral-600 hover:text-neutral-300'}
-        title="What this agent's last request ran on, and what it ran at. A transcript cannot say whether the window is 200k or 1M, so the `1M` comes from the alias this pane was given; `→ name` is an alias asked for that no request has run yet. A model with no effort level records none."
+        title="What this agent is running now, and what its last request ran at. A transcript cannot say whether the window is 200k or 1M, so that comes from the alias this pane was given — and an alias its own later requests contradict is dropped, so a refused switch does not stand here. A model with no effort level records none."
       >
         {label}
       </button>

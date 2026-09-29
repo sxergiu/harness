@@ -182,32 +182,28 @@ export const modelName = (model: string): string => model.replace(/^claude-/, ''
 export const modelLabel = (alias: string): string => alias.replace('[1m]', ' · 1M context');
 
 /**
- * What one agent runs on, in the width of a header field.
+ * What one agent is running NOW, in the width of a header field. One state, never
+ * a transition: `opus-5 → sonnet` says how it started and how it is going, and
+ * what you want off a board is which model your next request goes to.
  *
- * The TRANSCRIPT stays the vocabulary, because it is the only measured fact here:
- * an alias is a request, and one the account lacks is refused in the pane while
- * the agent carries on where it was. So the alias adds only the two things no
- * transcript can state, and states each as what it is:
+ * Two facts say it and neither is enough alone. The TRANSCRIPT is measured but
+ * past tense — the model of the last request, so it is the old one for as long as
+ * a switch has not been worked yet, and it cannot spell `[1m]` at all, since
+ * `opus` and `opus[1m]` both record `claude-opus-5`. The ALIAS is present tense
+ * but a claim — what the pane was asked to run — and the server keeps it only
+ * while the pane's own requests have not contradicted it (`aliasDisproven`), so a
+ * refused alias and a `/model` typed in the pane both fall back here rather than
+ * being reported as current forever.
  *
- * - `1M`, because `opus` and `opus[1m]` both record `claude-opus-5` — so without
- *   this the header showed the same four characters before and after that switch,
- *   forever, while the meter beside it silently changed window.
- * - `→ sonnet`, an alias asked for that no request has run yet. A `/model` queues
- *   behind the whole turn at a busy agent, so the honest reading is both names
- *   rather than either alone: the new one alone claims a switch that may still be
- *   refused, and the old one alone is a picker click that did nothing at all.
- *   It resolves itself on the agent's next request, and an arrow that never
- *   resolves is the one visible sign that the alias was turned down.
- *
- * Nothing measured yet leaves the alias standing alone — there is no reading for
- * it to be checked against, and `model` is the placeholder for having none.
+ * So: the alias is the answer, and the transcript refines it wherever a request
+ * of that family has actually run — which is the exact model id, version and all.
+ * Nothing asked for leaves the transcript to answer alone, which is every agent
+ * somebody started by hand.
  */
 export function modelReading(model: string | null, alias: string | null): string {
-  if (!model) return alias ?? 'model';
-  const name = modelName(model);
-  if (!alias) return name;
-  if (!aliasRuns(alias, model)) return `${name} → ${alias}`;
-  return alias.includes('[1m]') ? `${name} 1M` : name;
+  if (!alias) return model ? modelName(model) : 'model';
+  if (!model || !aliasRuns(alias, model)) return alias;
+  return alias.includes('[1m]') ? `${modelName(model)} 1M` : modelName(model);
 }
 
 /** "12m" / "3h" — time in the current state, which is what the board reports. */

@@ -1087,4 +1087,8 @@ rendered in a browser.
 
 The repo is committed and pushed to `github.com/sxergiu/harness`, which is now public — so
 the three links the package ships resolve for everyone rather than only for the owner, whose
-session resolved them either way. The human makes every commit.
+session resolved them either way. **Git in this checkout is delegated**, which is the product's
+own per-checkout grant turned on the repo that implements it: branch, commit, push and open the
+PR, run the four gates before any of it, and leave the merge, the GitHub release and
+`npm publish` to the human. [RELEASING.md](RELEASING.md) is where that line is drawn and why.
+It is a decision about ONE resolved path and extends to no other checkout.

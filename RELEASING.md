@@ -5,13 +5,25 @@ between two versions is split, branched, reviewed, merged, tagged and handed ove
 
 ## The rule that shapes everything below
 
-**You do not commit, tag, push, or publish. The human does.** CLAUDE.md says it ("The human
-makes every commit") and the cockpit's own agent rules say it again. Every `git` line in this
-file that writes anything is a line for the human to run — your job is to get the tree, the
-notes and the branch into the state where running it is the only thing left.
+**Git in THIS checkout is delegated to you. What leaves the machine is not.** Rule 1 — never
+commit or push — is still the default everywhere, and what lifts it here is the same
+per-checkout grant the cockpit itself models: a decision about one resolved path
+(`~/.harness/projects.json`, the `git` in a space's header), which extends nowhere else. An
+agent working in another checkout still prepares the command and stops.
 
-So the shape of your work in a release is: prepare, verify, hand over the exact command,
-stop. Never run it because it is obviously next.
+So the shape of your work is: branch, commit, push, open the PR, say what you pushed. Three
+things deliberately do NOT move with it, and each is a different reason rather than one rule
+applied three times:
+
+- **The four gates still run before the commit**, not after somebody has taken your word for
+  it. A delegation is permission to write history, not permission to skip the thing that makes
+  it worth having.
+- **The merge is the review**, not bookkeeping. Squash-merging your own PR is the one step that
+  makes the PR ceremony rather than a gate, so it stays the human's.
+- **Publishing is the human's**: `npm publish` (step 7) and the GitHub release (step 6). Both
+  are outward-facing and one of them cannot be taken back. Note that `git push` here is already
+  one of those in the small — the repo is public — which is why what you push is said out loud
+  rather than left in the log.
 
 ## What a release is here
 
@@ -101,18 +113,19 @@ that is what 0.2.2 exists to fix.
 [web][files] open a file the agent named, and three fixes under it (#3)
 ```
 
-`gh` is installed (2.101.0). Prepare the command; the human runs it:
+`gh` is installed (2.101.0) and logged in as `sxergiu` with `repo` and `workflow` scopes, so
+the first two are yours to run and the third is not:
 
 ```sh
 gh pr create --base master --head feat/<slug> --title "<subject>" --body-file <notes>
 gh pr checks --watch
-gh pr merge --squash --delete-branch
+gh pr merge --squash --delete-branch      # the human's — see the rule at the top
 ```
 
 `--delete-branch` is why step 4 is mostly bookkeeping: a squash-merge through `gh` takes the
-remote branch with it. **Check `gh auth status` before writing any `gh` line into a
-hand-over** — it currently reports no logged-in host, and every command above fails until
-`gh auth login` has been run once.
+remote branch with it. **Check `gh auth status` before writing any `gh` line anyway** — a
+keyring token is not forever, every command above fails the moment it lapses, and the fix
+(`gh auth login`) is interactive and therefore the human's.
 
 ## 4. Clean up the stale branches
 
@@ -121,17 +134,12 @@ What is left is the local copy, and any branch that predates this process — `f
 `feat/account-switching` and `feat/windows-and-linux` are all fully merged and still on the
 remote today.
 
-Confirm before proposing deletion — a branch with commits not in `master` is not stale, it is
-unfinished:
+Check before deleting anything — a branch with commits not in `master` is not stale, it is
+unfinished, and this is the one step here that destroys work rather than adding it:
 
 ```sh
-git log --oneline master..feat/<slug>     # empty means fully merged
-```
-
-Then, for the human:
-
-```sh
-git branch -d feat/<slug>
+git log --oneline master..feat/<slug>     # empty means fully merged, and nothing else does
+git branch -d feat/<slug>                 # -d, never -D: it refuses what the line above missed
 git push origin --delete feat/<slug>
 ```
 
@@ -178,8 +186,8 @@ index keeps pointing at nothing.
 
 ## 6. Release branch, tag, GitHub release
 
-The branch and the tag are both pointers at the release commit, which is on `master`. For the
-human:
+The branch and the tag are both pointers at the release commit, which is on `master` — so this
+waits on the human's merge of step 5 and then is yours:
 
 ```sh
 git branch harness-<version>
@@ -187,8 +195,10 @@ git tag v<version>
 git push origin master harness-<version> v<version>
 ```
 
-Then the GitHub release, **named `v<version>`, with `releases/<version>.md` as the body
-verbatim**. Three things have to say the same words — the notes file, the tag's release, and
+Then the GitHub release — **the human's, like `npm publish`**, and for the same reason: it is an
+announcement to everybody watching the repo rather than a pointer inside it. Written for them,
+**named `v<version>`, with `releases/<version>.md` as the body verbatim**. Three things have to
+say the same words — the notes file, the tag's release, and
 the changelog row — and the way they stay in agreement is that there is one place to write
 them.
 
@@ -218,7 +228,7 @@ After it lands, `npm view @sxergiu/harness version` is the confirmation.
 [ ] new test files named in the `test` script
 [ ] four gates green locally on every branch
 [ ] one PR per item, CI green on macOS + Linux + Windows
-[ ] squash-merged into master with (#N)
+[ ] human squash-merges into master with (#N)
 [ ] stale feat/* branches deleted, local and remote
 [ ] release commit: package.json, package-lock.json, releases/<v>.md, CHANGELOG.md row
 [ ] releases/ actually tracked by git

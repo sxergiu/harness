@@ -9,7 +9,7 @@ import type { FileViewer } from './fileRef.js';
 import { FileView } from './FileView.js';
 import { ContextMeter, Spinner, StatusDot, Working } from './Status.js';
 import { SubagentsTab } from './Subagents.js';
-import { modelLabel, modelName, since, useApi } from './useHarness.js';
+import { modelLabel, modelReading, since, useApi } from './useHarness.js';
 
 /**
  * The one-line height of the prompt field in px: 1px border + `py-1` + one
@@ -170,9 +170,13 @@ function CommandField(
  * an idle agent, the rest of the turn at a busy one — where the file does hold
  * this alias and an agent started by hand would inherit it.
  *
- * Nothing is read back afterwards. A cross-family switch on an agent that has
- * already worked raises Claude Code's own `Switch model?` confirm, which the
- * agent shows and the human answers in the pane or the blocked panel.
+ * What the switch is READ BACK as is `AgentRow.alias` — the request, remembered
+ * against the pane — and never more than that. Whether it took is only ever the
+ * transcript's answer: a cross-family switch on an agent that has already worked
+ * raises Claude Code's own `Switch model?` confirm, which the agent shows and the
+ * human answers in the pane or the blocked panel, and an alias the account lacks
+ * is refused there outright. So the label pairs the two (`modelReading`) rather
+ * than letting either stand for the other.
  */
 function ModelPicker(
   { agent, onPick, onEffort }: {
@@ -182,10 +186,11 @@ function ModelPicker(
   },
 ): React.ReactElement | null {
   const [open, setOpen] = useState(false);
-  // An agent that has not answered yet has no model to report, and a pruned
-  // transcript never will — but either can still be asked to switch, so the
-  // control stays and only its label goes unknown.
-  const name = agent.model ? modelName(agent.model) : 'model';
+  // What it is running, and the alias it has been asked to run — see
+  // `modelReading`. An agent that has not answered yet has no reading and a
+  // pruned transcript never will, but either can still be asked to switch, so
+  // the control stays and only its label goes unknown.
+  const name = modelReading(agent.model, agent.alias);
   // Read off the same request as the model, so the pair never describes two.
   // Absent is a state of its own and reads as one: a model with no effort level
   // shows the name alone rather than a placeholder standing in for a fact.
@@ -203,7 +208,7 @@ function ModelPicker(
       <button
         onClick={() => setOpen(!open)}
         className={open ? 'text-neutral-200' : 'text-neutral-600 hover:text-neutral-300'}
-        title="What this agent's last request ran on, and what it ran at. The transcript cannot say whether the window is 200k or 1M, and a model with no effort level records none."
+        title="What this agent's last request ran on, and what it ran at. A transcript cannot say whether the window is 200k or 1M, so the `1M` comes from the alias this pane was given; `→ name` is an alias asked for that no request has run yet. A model with no effort level records none."
       >
         {label}
       </button>
@@ -215,11 +220,18 @@ function ModelPicker(
             cockpit puts that file back afterwards — until it does, an agent you
             start by hand picks this up.
           </p>
+          {/* Marked like the effort row below, and meaning exactly what that
+              one does not: the alias this pane was ASKED for, which the header's
+              own label says whether a request has run on yet. */}
           {MODELS.map((m) => (
             <button
               key={m}
               onClick={() => { setOpen(false); onPick(m); }}
-              className="block w-full rounded px-1 py-0.5 text-left text-neutral-300 hover:bg-neutral-800"
+              className={`block w-full rounded px-1 py-0.5 text-left ${
+                agent.alias === m
+                  ? 'bg-neutral-800 text-neutral-100'
+                  : 'text-neutral-300 hover:bg-neutral-800'
+              }`}
             >
               {modelLabel(m)}
             </button>

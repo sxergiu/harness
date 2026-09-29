@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { AgentRow, ServerEvent, WorkspaceRow } from '@harness/shared';
+import { aliasRuns, type AgentRow, type ServerEvent, type WorkspaceRow } from '@harness/shared';
 
 export interface HarnessState {
   workspaces: WorkspaceRow[];
@@ -180,6 +180,35 @@ export const modelName = (model: string): string => model.replace(/^claude-/, ''
  * model's standard window, and only the 1M one has been established here.
  */
 export const modelLabel = (alias: string): string => alias.replace('[1m]', ' · 1M context');
+
+/**
+ * What one agent runs on, in the width of a header field.
+ *
+ * The TRANSCRIPT stays the vocabulary, because it is the only measured fact here:
+ * an alias is a request, and one the account lacks is refused in the pane while
+ * the agent carries on where it was. So the alias adds only the two things no
+ * transcript can state, and states each as what it is:
+ *
+ * - `1M`, because `opus` and `opus[1m]` both record `claude-opus-5` — so without
+ *   this the header showed the same four characters before and after that switch,
+ *   forever, while the meter beside it silently changed window.
+ * - `→ sonnet`, an alias asked for that no request has run yet. A `/model` queues
+ *   behind the whole turn at a busy agent, so the honest reading is both names
+ *   rather than either alone: the new one alone claims a switch that may still be
+ *   refused, and the old one alone is a picker click that did nothing at all.
+ *   It resolves itself on the agent's next request, and an arrow that never
+ *   resolves is the one visible sign that the alias was turned down.
+ *
+ * Nothing measured yet leaves the alias standing alone — there is no reading for
+ * it to be checked against, and `model` is the placeholder for having none.
+ */
+export function modelReading(model: string | null, alias: string | null): string {
+  if (!model) return alias ?? 'model';
+  const name = modelName(model);
+  if (!alias) return name;
+  if (!aliasRuns(alias, model)) return `${name} → ${alias}`;
+  return alias.includes('[1m]') ? `${name} 1M` : name;
+}
 
 /** "12m" / "3h" — time in the current state, which is what the board reports. */
 export function since(iso: string | null): string {

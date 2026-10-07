@@ -84,6 +84,12 @@ Every one was established by probing the live system, and most fail *silently* i
     be encoded safely for the target shell" — and fails the whole `agent.start`, it does not
     drop the flag. `rules.ts` therefore flattens its system prompt to one line, which is
     now the only argument it passes.
+    **A straight `"` is the same hazard, and Herdr does NOT catch it.** On Windows the start
+    is typed at Windows PowerShell 5.1, which wraps a native argument in quotes without
+    escaping the ones inside. Measured: rule 7's `("was X, now Y")` ended the argument at
+    `(was`, `X,` became claude's positional prompt, and rule 8 and the git amendment were
+    dropped silently — the agents in a delegated checkout refused to commit. `flatten` turns
+    straight quotes curly; never let one back into an argument.
 12. **A new pane is not ready when `tab.create` returns.** The shell is still sourcing rc
     files for ~0.5s, and `agent.start` starts an agent by *typing* the command — so a start
     issued immediately is swallowed, leaving a mangled line at a prompt while `agent.start`

@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -288,6 +288,104 @@ export function settleHolds(): void {
   }
 }
 
+// ---------------------------------------------------------------------------
+// ~/.harness/claude-model
+// ---------------------------------------------------------------------------
+
+/**
+ * The alias the cockpit asserts into `~/.claude/settings.json`, so that the
+ * machine default is the settings screen's to set and nobody else's.
+ *
+ * NOT `~/.harness/model`, which is a different claim and must stay one: that is
+ * the `--model` flag, true of agents the cockpit STARTS and silent about every
+ * other, and its blank means no flag at all. This is about the file every agent
+ * started BY HAND reads, and about `contextOf`'s fallback for a pane whose own
+ * claim is gone. One picker writing both would make that blank mean two things
+ * — no flag, and no machine default — and the second is strictly worse than
+ * leaving the key alone, since it hands the machine no default whatsoever.
+ *
+ * Read per use and never cached, for `chrome.ts`'s reason: the screen promises
+ * the next heartbeat, and a cached read would make that a lie.
+ *
+ * Whatever is stored goes through unread, exactly as `modelDefault` does — the
+ * route is the gate. `modelFrom` is deliberately not reused: its newline refusal
+ * is about Herdr failing `agent.start` on one (invariant 11), and this value
+ * reaches a JSON string and never a shell.
+ */
+const PINNED = join(homedir(), '.harness', 'claude-model');
+
+export function pinnedAlias(): string | null {
+  try {
+    const pin = readFileSync(PINNED, 'utf8').trim();
+    return pin === '' ? null : pin;
+  } catch {
+    return null;
+  }
+}
+
+/** Blank removes the file, the same reset as `setModelDefault` and `setAutoAccept`. */
+export function setPinnedAlias(alias: string): void {
+  const pin = alias.trim();
+  if (pin === '') {
+    rmSync(PINNED, { force: true });
+    return;
+  }
+  mkdirSync(dirname(PINNED), { recursive: true });
+  writeFileSync(PINNED, pin);
+}
+
+/**
+ * Whether the pin has drifted out of the file. Split out pure for
+ * `settleAction`'s reason — every answer here looks identical on the settings
+ * screen, which reports the pin and not the writing of it, so a pin that never
+ * asserts and a pin that works are the same two rows. The bug this closes was
+ * the file quietly holding `haiku` for an unknown length of time.
+ *
+ * No pin LEAVES, which is what keeps an install that never set one on exactly
+ * today's behaviour. Equal leaves too: this runs every resync against a file
+ * every running agent also writes, and writing on every heartbeat would be a
+ * loop nobody sees until something it clobbered goes missing.
+ */
+export function pinAction(pinned: string | null, current: string | null): 'leave' | 'write' {
+  return pinned !== null && pinned !== current ? 'write' : 'leave';
+}
+
+/**
+ * Put the machine default back wherever it has moved.
+ *
+ * Unlike a hold this WAITS FOR NOTHING, and that is the whole difference
+ * between them. A hold has one write to catch, and restoring before it lands
+ * leaves the switch's own value standing afterwards — so it must watch for
+ * `want`. A pin re-asserts on every heartbeat, so a `/model` that lands forty
+ * seconds later behind a long turn is simply undone on the next one:
+ * convergent rather than timed, which is why it belongs on this seam and could
+ * never be a `setTimeout`.
+ *
+ * It makes `hold` redundant for `model` wherever a pin is set — what every
+ * switch then finds is the pinned value, so the hold restores what this writes
+ * and the two cannot disagree. The hold stays regardless: it is still the only
+ * defence when nothing is pinned, and still the whole of the defence for
+ * `effortLevel`.
+ */
+function settlePin(): void {
+  const pin = pinnedAlias();
+  readSettings();
+  if (pinAction(pin, settingsAlias) === 'write') writeSetting('model', pin);
+}
+
+/**
+ * Both defences of Claude Code's settings, in the order that matters: a pin
+ * changed while a hold is open wins the same heartbeat, where the other order
+ * would let a stale `restoreTo` stand for one tick.
+ *
+ * Named apart from `board.ts`'s `settleClaims`, which settles the pane-keyed
+ * alias claims and shares nothing with this but a verb.
+ */
+export function settleSettings(): void {
+  settleHolds();
+  settlePin();
+}
+
 /**
  * One key of Claude Code's own settings, left exactly as `trustFolder` leaves
  * `~/.claude.json`. Re-read immediately before writing and only the one key
@@ -298,17 +396,30 @@ export function settleHolds(): void {
  * you lose: measured at 0600 on this machine, and a fresh temp file renamed
  * over it would publish a file the human had kept private, saying nothing.
  *
+ * A MISSING file is created, because a pin is exactly what fills it and
+ * refusing left the screen promising a write every heartbeat that never came.
+ * At 0600, the mode measured above. An UNREADABLE one still throws: replacing
+ * it would discard whatever the human had in it.
+ *
  * Best-effort: a failure costs the default its hold, never the switch that was
  * already sent.
  */
 function writeSetting(key: SettingKey, value: string | null): void {
   try {
-    const settings = JSON.parse(readFileSync(SETTINGS, 'utf8')) as Record<string, unknown>;
+    let settings: Record<string, unknown> = {};
+    let mode = 0o600;
+    try {
+      settings = JSON.parse(readFileSync(SETTINGS, 'utf8')) as Record<string, unknown>;
+      mode = statSync(SETTINGS).mode;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+      mkdirSync(dirname(SETTINGS), { recursive: true });
+    }
     if (value === null) delete settings[key];
     else settings[key] = value;
 
     const tmp = `${SETTINGS}.harness-${process.pid}`;
-    writeFileSync(tmp, `${JSON.stringify(settings, null, 2)}\n`, { mode: statSync(SETTINGS).mode });
+    writeFileSync(tmp, `${JSON.stringify(settings, null, 2)}\n`, { mode });
     renameSync(tmp, SETTINGS);
     settingsAt = -1; // our own write, so the next read must not trust the mtime
   } catch {

@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import { sameAccount } from '@harness/shared';
 import { parse as parseAccounts, rowFor, statusOf } from './account.js';
 import { seedCwd } from './board.js';
-import { HOLD_MS, decide, holdFor, settleAction } from './claudeFiles.js';
+import { HOLD_MS, decide, holdFor, pinAction, settleAction } from './claudeFiles.js';
 import { buildAgentDiff, within } from './diff.js';
 import {
   announces, backoffMs, paneTookText, promptBoxHolds, staleServerWarning, type PaneInfo,
@@ -405,6 +405,24 @@ test('switching to what the file already says takes no hold', () => {
   // Settings naming no model at all is a real state, and the restore for it is
   // to remove the key rather than to write the string "null" into it.
   assert.deepEqual(holdFor(undefined, 'haiku', null, 0)?.restoreTo, null);
+});
+
+test('a pin asserts only on drift, and an unpinned default is left alone', () => {
+  // No pin is every install until somebody sets one, and it must stay exactly
+  // the behaviour that shipped: the file is whatever anything else made it.
+  assert.equal(pinAction(null, 'haiku'), 'leave');
+  assert.equal(pinAction(null, null), 'leave');
+  // Drift is the whole signal. This is what a `/model` typed in a pane leaves
+  // behind, and what left the file on `haiku` while every agent ran opus[1m] —
+  // silent, because nothing but the context meter's denominator reads it.
+  assert.equal(pinAction('opus[1m]', 'haiku'), 'write');
+  // Settings naming no model at all is a real state, and a pin is what fills it.
+  assert.equal(pinAction('opus[1m]', null), 'write');
+  // Settled leaves. This runs on every resync against a file every running
+  // agent also writes, so writing here unconditionally would be a heartbeat
+  // loop over Claude Code's own settings — invisible until it clobbered
+  // something a concurrent write had just put there.
+  assert.equal(pinAction('opus[1m]', 'opus[1m]'), 'leave');
 });
 
 test('the model is read past a subagent, whose requests are its own', () => {

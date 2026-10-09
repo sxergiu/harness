@@ -773,7 +773,10 @@ foot of the board because that is where the bars that prompt it are.
   the launch SEPARATELY so a disproven switch uncovers the `--model` still under it. The
   ordering is the whole of it — the request before an ask is of the old model by definition, so
   comparing families alone calls every switch refused the instant it is made, which is the
-  reading this replaced. `aliasRuns` is in `shared` because both sides ask it of the same pair;
+  reading this replaced. **It is ordered on the TURN, not the request** (`answeredSince`): a
+  switch sent to a busy agent queues behind the whole turn, whose remaining requests all land
+  after the ask on the old model, and timing the request dropped every switch made at a working
+  agent while it was still queued. `aliasRuns` is in `shared` because both sides ask it of the same pair;
   the header's use of it hits the non-1M case, which `windowFor` short-circuits past, so it is
   pinned separately, as is the ordering rule. What survives none of this is Claude Code's own
   `Switch model?` confirm: until the human answers it in the pane, the label reads as the

@@ -242,18 +242,35 @@ export function modelOf(entries: Entry[]): string | null {
  * - a `/model` the human types in the pane themselves moves the session and tells
  *   this process nothing.
  *
- * `since` is what makes this evidence rather than a coincidence. The request
- * before a switch is of the old model by definition, so comparing families alone
- * would call every switch refused the instant it was made, which is the reading
- * this replaced. Only a request recorded after the ask can disprove it — and an
- * unparseable or absent timestamp proves nothing, so the claim stands.
+ * `since` is what makes this evidence rather than a coincidence — see
+ * `answeredSince`, which is the whole ordering rule.
  */
 export function aliasDisproven(entries: Entry[], alias: string, since: number): boolean {
-  const e = lastRequest(entries);
-  const model = e?.message?.model;
-  const at = Date.parse(e?.timestamp ?? '');
-  if (!model || !Number.isFinite(at)) return false;
-  return at > since && !aliasRuns(alias, model);
+  const model = answeredSince(entries, since)?.message?.model;
+  return !!model && !aliasRuns(alias, model);
+}
+
+/**
+ * The newest request, if it belongs to a turn OPENED after `since` — else null,
+ * which proves nothing and leaves a claim standing.
+ *
+ * The turn and not the request, because a `/model` or `/effort` sent to a busy
+ * agent queues behind the whole turn, and every request that turn makes
+ * meanwhile is later than the ask and still on the old values. Timing the
+ * request dropped every switch made at a working agent while it was queued. A
+ * turn opens on any user entry with text, which includes the slash command
+ * itself once it runs; tool results carry none and open nothing. An
+ * unparseable or absent timestamp proves nothing either.
+ */
+function answeredSince(entries: Entry[], since: number): Entry | null {
+  const request = lastRequest(entries);
+  if (!request) return null;
+  for (let i = entries.lastIndexOf(request) - 1; i >= 0; i--) {
+    const e = entries[i];
+    if (!e || e.isSidechain || e.isMeta || e.type !== 'user' || userText(e) === null) continue;
+    return Date.parse(e.timestamp ?? '') > since ? request : null;
+  }
+  return null;
 }
 
 /**
@@ -296,14 +313,12 @@ export function effortOf(entries: Entry[]): string | null {
  * absence is itself a measurement, not a silence, which is why a missing
  * `effort` disproves here where a missing `model` proves nothing there.
  *
- * `since` carries the same ordering rule and for the same reason: the request
- * before an ask is at the old level by definition.
+ * `since` carries the same ordering rule (`answeredSince`) and for the same
+ * reason: a turn opened before an ask is at the old level by definition.
  */
 export function effortDisproven(entries: Entry[], level: string, since: number): boolean {
-  const e = lastRequest(entries);
-  const at = Date.parse(e?.timestamp ?? '');
-  if (!e || !Number.isFinite(at)) return false;
-  return at > since && (e.effort ?? null) !== level;
+  const e = answeredSince(entries, since);
+  return e !== null && (e.effort ?? null) !== level;
 }
 
 /**

@@ -109,8 +109,8 @@ export class Board {
    *
    * WITH THE TIME IT WAS ASKED, which is what makes it falsifiable: a refused
    * alias, or a `/model` the human types in the pane, leaves this saying
-   * something the agent stopped doing, and only a request recorded after the ask
-   * can show that (`aliasDisproven`). Disproven, it is deleted rather than
+   * something the agent stopped doing, and only a request in a turn opened after
+   * the ask can show that (`aliasDisproven`). Disproven, it is deleted rather than
    * flagged — there is nothing left to say about a claim the agent has answered.
    *
    * In memory and dropped with the pane, for the shade's reason. After a

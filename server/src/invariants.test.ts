@@ -427,25 +427,31 @@ test('the effort is read off the same request as the model, never an older one',
   assert.equal(effortOf(entries.slice(0, 1)), 'high');
 });
 
+/** One turn: the human's prompt at `iso`, and a request answering it a second later. */
+const turnAt = (iso: string, request: Omit<Entry, 'type'>): Entry[] => [
+  { type: 'user', timestamp: iso, message: { content: 'go on' } },
+  { type: 'assistant', timestamp: new Date(Date.parse(iso) + 1000).toISOString(), ...request },
+];
+
 test('a level asked for is answered by the cap as surely as by a refusal', () => {
-  const at = (iso: string, effort?: string): Entry =>
-    ({ type: 'assistant', timestamp: iso, effort, message: { model: 'claude-opus-5' } });
+  const at = (iso: string, effort?: string): Entry[] =>
+    turnAt(iso, { effort, message: { model: 'claude-opus-5' } });
   const asked = Date.parse('2026-09-29T12:00:00.000Z');
 
-  // Same ordering rule as the alias: the request before the ask is at the old
+  // Same ordering rule as the alias: a turn opened before the ask is at the old
   // level by definition, and reading it as evidence would drop every switch the
   // instant it was made.
-  assert.equal(effortDisproven([at('2026-09-29T11:59:59.000Z', 'high')], 'max', asked), false);
+  assert.equal(effortDisproven(at('2026-09-29T11:59:59.000Z', 'high'), 'max', asked), false);
   // The ask honoured.
-  assert.equal(effortDisproven([at('2026-09-29T12:00:01.000Z', 'max')], 'max', asked), false);
+  assert.equal(effortDisproven(at('2026-09-29T12:00:01.000Z', 'max'), 'max', asked), false);
   // Claude Code CAPS the level at the model's ceiling and records what it
   // allowed. That is an answer, not a disagreement to argue with — left
   // standing, the header would report a level no request has ever run at.
-  assert.equal(effortDisproven([at('2026-09-29T12:00:01.000Z', 'high')], 'max', asked), true);
+  assert.equal(effortDisproven(at('2026-09-29T12:00:01.000Z', 'high'), 'max', asked), true);
   // ABSENCE IS THE MEASUREMENT, which is the one place this parts company with
   // `aliasDisproven`: a model with no effort level records none, so a request
   // carrying nothing says the level is gone rather than saying nothing at all.
-  assert.equal(effortDisproven([at('2026-09-29T12:00:01.000Z')], 'high', asked), true);
+  assert.equal(effortDisproven(at('2026-09-29T12:00:01.000Z'), 'high', asked), true);
   // Nothing to check against still proves nothing — a fresh session, a pruned
   // transcript, an entry with no usable timestamp.
   assert.equal(effortDisproven([], 'high', asked), false);
@@ -453,6 +459,20 @@ test('a level asked for is answered by the cap as surely as by a refusal', () =>
     effortDisproven([{ type: 'assistant', message: { model: 'claude-opus-5' } }], 'high', asked),
     false,
   );
+});
+
+test('a switch queued behind a turn is not refused by the rest of that turn', () => {
+  // A `/model` or `/effort` sent to a busy agent waits for the turn to end, and
+  // every request the turn makes meanwhile is AFTER the ask and on the old
+  // values. Counting those dropped the switch while it was still queued.
+  const asked = Date.parse('2026-09-29T12:00:00.000Z');
+  const busy = turnAt('2026-09-29T11:59:00.000Z', {});
+  busy[1] = {
+    type: 'assistant', timestamp: '2026-09-29T12:00:05.000Z', effort: 'high',
+    message: { model: 'claude-opus-5' },
+  };
+  assert.equal(aliasDisproven(busy, 'sonnet', asked), false);
+  assert.equal(effortDisproven(busy, 'max', asked), false);
 });
 
 test('the 1M window is refused to a session not on that model', () => {
@@ -482,29 +502,28 @@ test('an alias names a family, which is what refines a measured model', () => {
 });
 
 test('ONLY A REQUEST AFTER THE ASK CAN DISPROVE IT, which is what makes the label current', () => {
-  const at = (iso: string, model: string): Entry =>
-    ({ type: 'assistant', timestamp: iso, message: { model } });
+  const at = (iso: string, model: string): Entry[] => turnAt(iso, { message: { model } });
   const asked = Date.parse('2026-09-29T12:00:00.000Z');
 
   // The request BEFORE a switch is of the old model by definition. Reading it as
   // evidence calls every switch refused the instant it is made, which puts the
   // header back to showing the model the agent has just been moved off.
   assert.equal(
-    aliasDisproven([at('2026-09-29T11:59:59.000Z', 'claude-opus-5')], 'sonnet', asked),
+    aliasDisproven(at('2026-09-29T11:59:58.000Z', 'claude-opus-5'), 'sonnet', asked),
     false,
   );
-  // A request after it, on another family: the ask did not take — refused in the
-  // pane, or overridden by a `/model` typed there. Left standing, it would be
+  // A turn opened after it, on another family: the ask did not take — refused in
+  // the pane, or overridden by a `/model` typed there. Left standing, it would be
   // reported as the current model for the life of the pane.
   assert.equal(
-    aliasDisproven([at('2026-09-29T12:00:01.000Z', 'claude-opus-5')], 'sonnet', asked),
+    aliasDisproven(at('2026-09-29T12:00:01.000Z', 'claude-opus-5'), 'sonnet', asked),
     true,
   );
   // The ask honoured. `[1m]` is invisible in a transcript, so the family is all
   // there is to agree with, and disagreeing here would drop the only record that
   // the session has the wider window.
   assert.equal(
-    aliasDisproven([at('2026-09-29T12:00:01.000Z', 'claude-opus-5')], 'opus[1m]', asked),
+    aliasDisproven(at('2026-09-29T12:00:01.000Z', 'claude-opus-5'), 'opus[1m]', asked),
     false,
   );
   // Nothing to check against proves nothing: a fresh session, a pruned

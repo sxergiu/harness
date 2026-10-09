@@ -25,6 +25,22 @@ delegated checkout. That is worth naming rather than quietly rewriting: **a docu
 first rule is visibly void reads as advisory all the way down**, and that is the state the
 rest of this file was read in when it was ignored.
 
+Three things deliberately do NOT move with the delegation, and each is a different reason
+rather than one rule applied three times:
+
+- **The four gates still run before the commit**, not after somebody has taken your word for
+  it. A delegation is permission to write history, not permission to skip the thing that makes
+  it worth having.
+- **The merge is the review**, not bookkeeping. Squash-merging your own PR is the one step that
+  makes the PR ceremony rather than a gate, so it stays the human's.
+- **Publishing is the human's**: `npm publish` (step 7) and the GitHub release (step 6). Both
+  are outward-facing and one of them cannot be taken back. Note that `git push` here is already
+  one of those in the small — the repo is public — which is why what you push is said out loud
+  rather than left in the log.
+
+The merge and the GitHub release move only when the human hands them over **explicitly, for
+that round** — 0.4.0 was merged and released that way. `npm publish` never moves.
+
 ## What a release is here
 
 One version, made of a **list of features and a list of fixes** decided up front. Each item
@@ -159,18 +175,19 @@ Feat: Display the running model for each agent box (#4)
 `[web][files] open a file the agent named, and three fixes under it (#3)` predates this and is
 not the model to copy.
 
-`gh` is installed (2.101.0). Prepare the command; the human runs it:
+`gh` is installed (2.101.0) and logged in as `sxergiu` with `repo` and `workflow` scopes, so
+the first two are yours to run and the third is not:
 
 ```sh
 gh pr create --base master --head feat/<slug> --title "<subject>" --body-file <notes>
 gh pr checks --watch
-gh pr merge --squash --delete-branch
+gh pr merge --squash --delete-branch      # the human's — see the rule at the top
 ```
 
 `--delete-branch` is why step 4 is mostly bookkeeping: a squash-merge through `gh` takes the
-remote branch with it. **Check `gh auth status` before writing any `gh` line into a
-hand-over** — it currently reports no logged-in host, and every command above fails until
-`gh auth login` has been run once.
+remote branch with it. **Check `gh auth status` before writing any `gh` line anyway** — a
+keyring token is not forever, every command above fails the moment it lapses, and the fix
+(`gh auth login`) is interactive and therefore the human's.
 
 ## 4. Clean up the stale branches
 
@@ -179,17 +196,12 @@ What is left is the local copy, and any branch that predates this process — `f
 `feat/account-switching` and `feat/windows-and-linux` are all fully merged and still on the
 remote today.
 
-Confirm before proposing deletion — a branch with commits not in `master` is not stale, it is
-unfinished:
+Check before deleting anything — a branch with commits not in `master` is not stale, it is
+unfinished, and this is the one step here that destroys work rather than adding it:
 
 ```sh
-git log --oneline master..feat/<slug>     # empty means fully merged
-```
-
-Then, for the human:
-
-```sh
-git branch -d feat/<slug>
+git log --oneline master..feat/<slug>     # empty means fully merged, and nothing else does
+git branch -d feat/<slug>                 # -d, never -D: it refuses what the line above missed
 git push origin --delete feat/<slug>
 ```
 
@@ -249,8 +261,8 @@ green throughout.
 
 ## 6. Release branch, tag, GitHub release
 
-The branch and the tag are both pointers at the release commit, which is on `master`. For the
-human:
+The branch and the tag are both pointers at the release commit, which is on `master` — so this
+waits on the human's merge of step 5 and then is yours:
 
 ```sh
 git branch harness-<version>
@@ -258,8 +270,10 @@ git tag v<version>
 git push origin master harness-<version> v<version>
 ```
 
-Then the GitHub release, **named `v<version>`, with `releases/<version>.md` as the body
-verbatim**. Three things have to say the same words — the notes file, the tag's release, and
+Then the GitHub release — **the human's, like `npm publish`**, and for the same reason: it is an
+announcement to everybody watching the repo rather than a pointer inside it. Written for them,
+**named `v<version>`, with `releases/<version>.md` as the body verbatim**. Three things have to
+say the same words — the notes file, the tag's release, and
 the changelog row — and the way they stay in agreement is that there is one place to write
 them.
 
@@ -291,7 +305,7 @@ After it lands, `npm view @sxergiu/harness version` is the confirmation.
 [ ] four gates green locally on every branch
 [ ] one PR per item, title a descriptive sentence (Feat:/Fix:), body documentation not story
 [ ] CI green on macOS + Linux + Windows
-[ ] squash-merged into master with (#N)
+[ ] human squash-merges into master with (#N)
 [ ] stale feat/* branches deleted, local and remote
 [ ] release commit: package.json, package-lock.json, releases/<v>.md, CHANGELOG.md row
 [ ] git status clean — nothing shipping to npm that is untracked here

@@ -1167,4 +1167,7 @@ session resolved them either way.
 agent rules carry that exception and scope it to the checkout granting it. Read the grant for
 what it says: it hands over the typing. It does not hand over the release process
 [RELEASING.md](RELEASING.md) describes, and 0.3.0 went out as one unreviewed commit because
-those two were read as one thing.
+those two were read as one thing. **Git in this checkout is delegated**: branch, commit, push
+and open the PR, run the four gates before any of it, and leave the merge, the GitHub release
+and `npm publish` to the human unless they hand a step over explicitly. It is a decision about
+ONE resolved path and extends to no other checkout.

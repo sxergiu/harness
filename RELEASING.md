@@ -5,15 +5,28 @@ between two versions is split, branched, reviewed, merged, tagged and handed ove
 
 ## The rule that shapes everything below
 
-**Git in THIS checkout is delegated to you. What leaves the machine is not.** Rule 1 — never
-commit or push — is still the default everywhere, and what lifts it here is the same
-per-checkout grant the cockpit itself models: a decision about one resolved path
-(`~/.harness/projects.json`, the `git` in a space's header), which extends nowhere else. An
-agent working in another checkout still prepares the command and stops.
+**`npm publish` is the human's. Everything else here depends on whether git is delegated to
+you in the checkout you are standing in**, and you must know which before you touch anything.
 
-So the shape of your work is: branch, commit, push, open the PR, say what you pushed. Three
-things deliberately do NOT move with it, and each is a different reason rather than one rule
-applied three times:
+Where it is **not** delegated — the default, and what CLAUDE.md means by "The human makes
+every commit" — every `git` line in this file that writes anything is a line for the human to
+run. Your job is to get the tree, the notes and the branch into the state where running it is
+the only thing left: prepare, verify, hand over the exact command, stop.
+
+Where it **is** delegated, you run those lines yourself. What the delegation hands over is the
+typing, and nothing else. It does not hand over **what** to commit, and specifically it is not
+permission to skip the split in §1–3: a grant to push is not a grant to decide a release needs
+no review. 0.3.0 is the whole reason this section reads this way — the grant was real, the
+seven pull requests it still required were not opened, and the release went to `master` as one
+commit of 1,576 lines that nobody could review.
+
+This section used to open `You do not commit, tag, push, or publish`, which was false in a
+delegated checkout. That is worth naming rather than quietly rewriting: **a document whose
+first rule is visibly void reads as advisory all the way down**, and that is the state the
+rest of this file was read in when it was ignored.
+
+Three things deliberately do NOT move with the delegation, and each is a different reason
+rather than one rule applied three times:
 
 - **The four gates still run before the commit**, not after somebody has taken your word for
   it. A delegation is permission to write history, not permission to skip the thing that makes
@@ -24,6 +37,9 @@ applied three times:
   are outward-facing and one of them cannot be taken back. Note that `git push` here is already
   one of those in the small — the repo is public — which is why what you push is said out loud
   rather than left in the log.
+
+The merge and the GitHub release move only when the human hands them over **explicitly, for
+that round** — 0.4.0 was merged and released that way. `npm publish` never moves.
 
 ## What a release is here
 
@@ -46,6 +62,25 @@ three.
 
 Post the list before you start. It is the thing the human corrects cheaply, and the branch
 names come straight off it.
+
+### When the work is already there, STOP AND ASK
+
+The case above assumes you start before the code does. Sometimes you do not: you arrive and
+the release is already sitting in the tree as one undifferentiated pile of modified files,
+with no branches and nothing committed. That is not an exemption from the split. It is the
+moment to stop, say so, and ask — because collapsing it into one commit and splitting it into
+the items it is made of are materially different work, and which one happens is the human's
+call.
+
+The split is usually still available at that point, and cheaper than it looks: `releases/<v>.md`
+is written per item, so the notes already name them. 0.3.0's notes named seven — three features
+and four fixes, each with its own `##` section — and it still went to `master` as a single
+1,576-line commit, because the deviation was noticed and *reported* rather than raised.
+
+**Noticing is not asking, and this is the tell.** If you find yourself about to write a line
+like *"this is one commit rather than the per-item PRs RELEASING.md describes"* into a summary,
+you are describing a decision you already took alone and are now disclosing. Stop there. That
+sentence belongs in a question asked before the commit, never in a report written after it.
 
 ## 2. One branch per item
 
@@ -99,19 +134,46 @@ has a check that fails until the new file is named there.
 
 ## 3. Pull request, then squash
 
-One PR per branch, into `master`. The body says what the item is and what it does not cover;
-the known-and-not-fixed paragraph in `releases/0.2.2.md` is the tone.
+One PR per branch, into `master`.
+
+### Title
+
+A descriptive sentence naming what the reader gets, optionally prefixed `Feat:` or `Fix:`.
+
+```
+Feat: Display the running model for each agent box
+Fix: Submit a pasted prompt without a second Enter
+```
+
+**`[area][topic]` is the commit convention and does not belong here.** A commit subject is
+read inside the branch it belongs to, where the area narrows a diff somebody is already
+looking at. A PR title is read in a list of PRs by somebody deciding whether to open it, and
+a bracket prefix tells them nothing a sentence would not.
+
+### Body
+
+**Documentation, not a story.** It is read by somebody deciding whether this is correct and
+then living with it, not by somebody being told how the work went. So: what the change is,
+what it covers, what it deliberately does not, and anything a reviewer has to check by hand.
+State findings as facts rather than narrating how they were arrived at, and leave out the
+false starts entirely. The "Known, and not fixed here" section of `releases/0.2.2.md` is the
+shape.
 
 **CI must be green on all three platforms.** The matrix is macOS, Linux and Windows with
 `fail-fast: false`, and it is the only evidence behind the claim that anybody may install this.
 A red Windows leg is not a flake to re-run, it is the release's Windows claim being false —
 that is what 0.2.2 exists to fix.
 
-**Merge by squash**, so `master` gets one commit per item with the PR number appended:
+**Merge by squash**, so `master` gets one commit per item with the PR number appended. GitHub
+takes the PR **title** as that subject, so this is the one place the two conventions meet and
+the PR title is what lands:
 
 ```
-[web][files] open a file the agent named, and three fixes under it (#3)
+Feat: Display the running model for each agent box (#4)
 ```
+
+`[web][files] open a file the agent named, and three fixes under it (#3)` predates this and is
+not the model to copy.
 
 `gh` is installed (2.101.0) and logged in as `sxergiu` with `repo` and `workflow` scopes, so
 the first two are yours to run and the third is not:
@@ -155,10 +217,12 @@ the exact tree the tag will point at, rather than after the fact.
 It touches exactly four things:
 
 1. **`package.json`** — `version`.
-2. **`package-lock.json`** — same version, via `npm install --package-lock-only`. This is
-   drifting right now: the lock says `0.2.0` while `package.json` says `0.3.0`, and 0.2.1 and
-   0.2.2 never updated it either. `npm ci` does not check the root version, so it fails
-   silently and forever.
+2. **`package-lock.json`** — same version, via `npm install --package-lock-only`. It had drifted
+   to `0.2.0` against a manifest at `0.3.0` before 0.3.0 put it back: 0.2.1 and 0.2.2 both moved
+   the manifest and neither moved the lock. **`npm ci` does not check the root version**, so
+   nothing anywhere reports this — do not expect a gate to catch it for you. Regenerating also
+   drops whatever the lock is still carrying from an older manifest; in 0.3.0 that was an
+   `os: ["darwin"]` block two releases after the field itself was removed.
 3. **`releases/<version>.md`** — the notes. One file per release, holding only what is new in
    that one.
 4. **`CHANGELOG.md`** — one new row in the index table, linking to that file. The index is
@@ -166,23 +230,34 @@ It touches exactly four things:
 
 ### Writing the notes
 
-Read `releases/0.2.1.md` and `releases/0.2.2.md` before writing a new one. What makes them
-work:
+**Documentation, not a story** — the same rule as a PR body, and for the same reader: somebody
+deciding whether to take this version and what it changes for them.
 
-- **Lead with the thing somebody was hit by**, not the biggest diff.
-- **One `##` section per item**, titled as the problem rather than the patch.
-- Say what was **measured**. Numbers, the exact wrong behaviour, what was observed.
+- **One `##` section per item**, titled by its subject.
+- **Lead each section with what changed**, then what it affects, then the evidence. Not the
+  order the work happened in, and never a finding saved for a reveal.
+- **Lead the file with what a reader is most likely to be hit by**, not the biggest diff.
+- Say what was **measured** — numbers, the exact wrong behaviour, what was observed — as a
+  stated fact rather than an account of finding it. No first person, no debugging narrative,
+  no false starts.
 - Say what was **not** fixed. `0.2.2` has a "Known, and not fixed here" section and it is the
   most useful part of the file.
 - Say when production was never affected, plainly, rather than letting a fix imply an outage.
 
-### One thing to fix in the next release commit
+### npm packs the working directory, so `git status` is the check
 
-**`releases/` has never been committed.** Not ignored — untracked, all six files, since the
-split out of `CHANGELOG.md`. So every link in the changelog index is a 404 on GitHub for
-everyone, and the files reach npm only because `npm publish` packs the working directory. The
-next release commit must add the back-filled `0.1.0`–`0.2.2` notes along with its own, or the
-index keeps pointing at nothing.
+Fixed in 0.3.0, which committed the back-filled `0.1.0`–`0.2.2` notes along with its own. It is
+kept here because the thing that hid it is still true of every file added from now on.
+
+**`releases/` had never been committed** — not ignored, just untracked, all six files, from the
+split out of `CHANGELOG.md` until 0.3.0. Every link in the changelog index was a 404 on GitHub
+for everyone, for five releases, while the notes themselves shipped to npm perfectly: `npm
+publish` packs the working directory, not the index. So a file can be present in the tarball
+and absent from the repository at the same time, and **inspecting the published package is
+exactly the check that cannot see it**.
+
+`git status` before the release commit is what catches it. `npm pack --dry-run` is not — it was
+green throughout.
 
 ## 6. Release branch, tag, GitHub release
 
@@ -224,14 +299,16 @@ After it lands, `npm view @sxergiu/harness version` is the confirmation.
 
 ```
 [ ] release split into a list of features and fixes, posted, corrected
+[ ] work already in the tree? asked before committing, never split it alone
 [ ] each item on feat/<slug>, >=3 commits (1-2 only for a genuinely small fix)
 [ ] new test files named in the `test` script
 [ ] four gates green locally on every branch
-[ ] one PR per item, CI green on macOS + Linux + Windows
+[ ] one PR per item, title a descriptive sentence (Feat:/Fix:), body documentation not story
+[ ] CI green on macOS + Linux + Windows
 [ ] human squash-merges into master with (#N)
 [ ] stale feat/* branches deleted, local and remote
 [ ] release commit: package.json, package-lock.json, releases/<v>.md, CHANGELOG.md row
-[ ] releases/ actually tracked by git
+[ ] git status clean — nothing shipping to npm that is untracked here
 [ ] Actions green on the release commit
 [ ] harness-<v> branch + v<v> tag pushed
 [ ] GitHub release v<v>, body = releases/<v>.md

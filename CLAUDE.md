@@ -84,6 +84,12 @@ Every one was established by probing the live system, and most fail *silently* i
     be encoded safely for the target shell" — and fails the whole `agent.start`, it does not
     drop the flag. `rules.ts` therefore flattens its system prompt to one line, which is
     now the only argument it passes.
+    **A straight `"` is the same hazard, and Herdr does NOT catch it.** On Windows the start
+    is typed at Windows PowerShell 5.1, which wraps a native argument in quotes without
+    escaping the ones inside. Measured: rule 7's `("was X, now Y")` ended the argument at
+    `(was`, `X,` became claude's positional prompt, and rule 8 and the git amendment were
+    dropped silently — the agents in a delegated checkout refused to commit. `flatten` turns
+    straight quotes curly; never let one back into an argument.
 12. **A new pane is not ready when `tab.create` returns.** The shell is still sourcing rc
     files for ~0.5s, and `agent.start` starts an agent by *typing* the command — so a start
     issued immediately is swallowed, leaving a mangled line at a prompt while `agent.start`
@@ -372,8 +378,9 @@ server/src/
   claudeFiles.ts      every file of Claude Code's OWN that we touch: the planner
                       subagent and the two commands, `harness init`, the trust
                       grant for the one folder that is ours, and settings.json —
-                      read for the model in force, written only to put back what
-                      a per-agent switch overwrote
+                      read for the model in force, written to put back what a
+                      per-agent switch overwrote and to hold the machine default
+                      wherever `~/.harness/claude-model` pins it
   herdrRules.ts       merges our one detection rule into Herdr's current manifest
   chrome.ts           answering that dialog with "allow" when the human has said
                       it may. The only key this cockpit presses on its own
@@ -735,6 +742,29 @@ foot of the board because that is where the bars that prompt it are.
   flag now either: that file had no other writer, so what agents start at is whatever the
   human's settings say, which is stable again. The settings screen shows that level read-only
   and names where it comes from.
+  **`~/.harness/claude-model` IS NOT THAT PINNING COMING BACK**, and the name is close enough
+  to need saying. The deleted one made a PER-AGENT action write the machine default — the
+  leak wearing a helpful face. This one is the opposite end: the human names a machine
+  default on the settings screen, and `settlePin` holds `~/.claude/settings.json` at it on
+  the board's heartbeat, which is the half the old note called missing ("covered nothing
+  started by hand"). It is the one thing that closes the window the `hold` leaves open —
+  a `/model` typed in a pane, or a harness restarted mid-hold, each of which moves that file
+  and tells this process nothing. Measured: the file sat on `haiku` while `~/.harness/model`
+  said `opus[1m]`, so every pane whose in-memory claim died with a restart fell back to a
+  200k window and the context meter jumped ~5× on every session under 200k — the ones over
+  it were rescued by the peak-widening, which is why only SOME moved and why it read as
+  random. **A pin waits for nothing, and that is what separates it from a hold.** A hold has
+  one write to catch and must watch for `want`, since restoring early leaves the switch's
+  value standing; a pin re-asserts every heartbeat, so a write that lands forty seconds later
+  is simply undone on the next one. Convergent, not timed — which is why it may sit on that
+  seam and could never be a `setTimeout`. It writes only on DRIFT: this runs every resync
+  against a file every running agent also writes, and writing unconditionally would be a
+  heartbeat loop over Claude Code's own settings. Under a pin the `hold` is redundant for
+  `model` and cannot disagree with it — what every switch finds is then the pinned value —
+  but it is kept, because it is still the whole defence when nothing is pinned and still the
+  whole defence for `effortLevel`, which is deliberately not pinnable. And what it promises
+  is bounded honestly: nothing stops Claude Code writing that key, so this puts it back
+  rather than locking it, and while the harness is down nothing does.
   **Two aliases can name it now, and the FAMILY is what decides between them.** The cockpit
   passes its own `--model` (`~/.harness/model`) to agents it starts, and the settings file
   names the rest, so each alias is a claim about every agent that is true of some of them.
@@ -755,6 +785,50 @@ foot of the board because that is where the bars that prompt it are.
   the meter falls back to the default and the peak-widening recovers the rest. `startArgs`
   therefore takes the alias from its caller rather than reading the file itself: two reads are
   free to disagree, and the pane would then be remembered as running what it was never given.
+  **The HEADER reads that same chain, and not reading it was a live bug.** The label was the
+  transcript's model alone, which is the one thing that cannot say `[1m]` — so switching
+  `opus[1m]` → `opus` changed nothing on screen ever, while the meter beside it silently
+  changed window, and any other switch changed nothing until the agent's next request, which
+  reads as a picker click that did nothing. `aliasFor` is now the one expression behind both,
+  because a name and a window resolving the same chain differently is two answers to one
+  question. It reaches the browser as `AgentRow.alias`, applied in `agents()` beside the shade
+  and the lock — pane-keyed, in memory, and so never on a remembered row.
+  **It says what the pane is running NOW, and never how it got there.** `modelReading` takes
+  the alias as the answer and lets the transcript refine it wherever a request of that family
+  has actually run, which is where the exact id and version come from; `opus-5 → sonnet` was
+  the first attempt and it was wrong, because a transition is not what you want off a board —
+  one state is. That only works because the alias is kept UNREFUTED: `aliasDisproven` drops it
+  the moment one of the pane's own requests contradicts it, which is what a refused alias and a
+  `/model` typed in the pane each amount to from here, and `settleClaims` tests the switch and
+  the launch SEPARATELY so a disproven switch uncovers the `--model` still under it. The
+  ordering is the whole of it — the request before an ask is of the old model by definition, so
+  comparing families alone calls every switch refused the instant it is made, which is the
+  reading this replaced. **It is ordered on the TURN, not the request** (`answeredSince`): a
+  switch sent to a busy agent queues behind the whole turn, whose remaining requests all land
+  after the ask on the old model, and timing the request dropped every switch made at a working
+  agent while it was still queued. `aliasRuns` is in `shared` because both sides ask it of the same pair;
+  the header's use of it hits the non-1M case, which `windowFor` short-circuits past, so it is
+  pinned separately, as is the ordering rule. What survives none of this is Claude Code's own
+  `Switch model?` confirm: until the human answers it in the pane, the label reads as the
+  switch they asked for.
+  **THE LEVEL IS A CLAIM ON THE SAME TERMS, and its disproof is a DIFFERENT RULE.** A
+  `/effort` queues behind the whole turn exactly as a `/model` does, so reading it off the
+  transcript alone left the header answering with a request made before the click — the
+  picker-did-nothing bug, at the other half of the same popover. `effortSwitchedTo` records
+  what was asked and `settleClaims` drops it when a later request disagrees, pane-keyed and
+  in memory like the two above. But `effortDisproven` is not `aliasDisproven` over a
+  different field: Claude Code CAPS the level at the model's ceiling and records what it
+  allowed, so an `xhigh` that comes back `high` was ANSWERED rather than refused, and a
+  model with no level records NONE — which makes absence the measurement here where it is
+  silence there. Both differences drop the claim, and both are right to: what stands after
+  is what actually ran. There is no launch twin, since no `--effort` is passed.
+  **It is RESOLVED into `AgentRow.effort` rather than carried beside it**, which is the one
+  place this deliberately parts from the model. `alias` travels next to `model` because it
+  states two things a transcript cannot — `[1m]`, and the family before a request has run —
+  so the browser needs both to compute one reading. A level asked and a level measured are
+  the same five words, so a second field would only be a second opinion to weigh; `agents()`
+  applies the claim on the way out, beside the shade and the lock and for their reason, and
+  RECENT keeps the measured value by construction.
 - **The Tailwind ramp IS the theme, and light mode is one CSS block.** Every colour class
   resolves to `var(--color-*)` — verified in the compiled output, including opacity
   modifiers, which become `color-mix(in oklab, var(--color-teal-700) 35%, …)` inside an
@@ -1087,8 +1161,13 @@ rendered in a browser.
 
 The repo is committed and pushed to `github.com/sxergiu/harness`, which is now public — so
 the three links the package ships resolve for everyone rather than only for the owner, whose
-session resolved them either way. **Git in this checkout is delegated**, which is the product's
-own per-checkout grant turned on the repo that implements it: branch, commit, push and open the
-PR, run the four gates before any of it, and leave the merge, the GitHub release and
-`npm publish` to the human. [RELEASING.md](RELEASING.md) is where that line is drawn and why.
-It is a decision about ONE resolved path and extends to no other checkout.
+session resolved them either way.
+
+**The human makes every commit, EXCEPT where a checkout delegates git** — the cockpit's own
+agent rules carry that exception and scope it to the checkout granting it. Read the grant for
+what it says: it hands over the typing. It does not hand over the release process
+[RELEASING.md](RELEASING.md) describes, and 0.3.0 went out as one unreviewed commit because
+those two were read as one thing. **Git in this checkout is delegated**: branch, commit, push
+and open the PR, run the four gates before any of it, and leave the merge, the GitHub release
+and `npm publish` to the human unless they hand a step over explicitly. It is a decision about
+ONE resolved path and extends to no other checkout.

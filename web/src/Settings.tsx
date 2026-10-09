@@ -65,6 +65,10 @@ export function Settings({ onClose }: { onClose: () => void }): React.ReactEleme
           <>
             <Rules view={view} onSave={(text) => void write('/api/settings/rules', { text })} />
             <Model view={view} onSave={(alias) => void write('/api/settings/model', { alias })} />
+            <MachineDefault
+              view={view}
+              onPin={(alias) => void write('/api/settings/claude-model', { alias })}
+            />
             <Checkouts
               view={view}
               onRevoke={(path) =>
@@ -164,23 +168,7 @@ function Model(
       title="MODEL"
       note="Passed as --model to agents the cockpit starts. No choice means no flag at all, so your own ~/.claude/settings.json decides — the same as an agent started by hand. Switching one agent from its header does not move this, or that file: the cockpit puts back whatever the switch overwrote. An alias is a request: one this account has no access to makes the start fail with the CLI's own message. Applies to agents started from now on."
     >
-      <div className="flex flex-wrap items-center gap-2">
-        {/* `no choice` sits in the row as a sixth option rather than beside it
-            as a reset: it is a state of the same setting, not an undo. */}
-        {[...MODELS, ''].map((m) => (
-          <button
-            key={m || 'none'}
-            onClick={() => onSave(m)}
-            className={`rounded px-2 py-0.5 ${
-              (alias ?? '') === m
-                ? 'bg-neutral-700 text-neutral-100'
-                : 'bg-neutral-800 text-neutral-400 hover:text-neutral-200'
-            }`}
-          >
-            {m ? modelLabel(m) : 'no choice'}
-          </button>
-        ))}
-      </div>
+      <ModelRow value={alias} blank="no choice" onPick={onSave} />
       <div className="mt-1 flex text-neutral-600">
         <span>
           {alias === null
@@ -193,6 +181,70 @@ function Model(
         <span className="ml-auto pl-2">
           {effort === null ? 'no effort in settings' : `starts at ${effort} effort`}
         </span>
+      </div>
+    </Section>
+  );
+}
+
+/** The one strip both model settings are, since they differ only in what blank means. */
+function ModelRow(
+  { value, blank, onPick }: {
+    value: string | null;
+    blank: string;
+    onPick: (alias: string) => void;
+  },
+): React.ReactElement {
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      {/* Blank sits in the row as a sixth option rather than beside it as a
+          reset: it is a state of the same setting, not an undo. */}
+      {[...MODELS, ''].map((m) => (
+        <button
+          key={m || 'none'}
+          onClick={() => onPick(m)}
+          className={`rounded px-2 py-0.5 ${
+            (value ?? '') === m
+              ? 'bg-neutral-700 text-neutral-100'
+              : 'bg-neutral-800 text-neutral-400 hover:text-neutral-200'
+          }`}
+        >
+          {m ? modelLabel(m) : blank}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * The model in `~/.claude/settings.json` — a different claim from the one
+ * above, which is why it is a section and not a second row of it: that is a
+ * flag on agents the cockpit starts, this is the file every agent started by
+ * hand reads, and the one the context meter falls back to when it knows nothing
+ * else about a pane.
+ *
+ * The note promises only what the cockpit can do. Nothing stops Claude Code
+ * writing that key — a /model typed in any pane still writes it — so this puts
+ * it back rather than locking it, and while the harness is down nothing does.
+ */
+function MachineDefault(
+  { view, onPin }: { view: SettingsView; onPin: (alias: string) => void },
+): React.ReactElement {
+  const { pinned, configured } = view.model;
+
+  return (
+    <Section
+      title="MACHINE DEFAULT"
+      note="The model in your ~/.claude/settings.json, which agents started by hand run on and which the context meter falls back to for an agent the cockpit knows nothing else about. Pinning it writes that key and puts it back on every heartbeat, so a /model typed in a pane moves that session and no longer moves this. Not pinned leaves the key exactly as it is today: anything may move it, and a switch made while the cockpit is down stands until it comes back."
+    >
+      <ModelRow value={pinned} blank="not pinned" onPick={onPin} />
+      <div className="mt-1 text-neutral-600">
+        {pinned === null
+          ? `Not pinned — the file says ${configured ?? 'nothing'}, and anything may change it.`
+          : `Held at ${pinned}${
+            configured === pinned ? '.' : ` — the file says ${
+              configured ?? 'nothing'
+            }, put back on the next heartbeat.`
+          }`}
       </div>
     </Section>
   );

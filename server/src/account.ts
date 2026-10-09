@@ -50,10 +50,27 @@ const execFileAsync = promisify(execFile);
  * that would stall the 3s heartbeat that is the board's whole liveness.
  */
 async function claude(args: string[]): Promise<string> {
-  const { stdout } = await execFileAsync('claude', args, {
+  const [file, argv] = claudeCommand(args);
+  const { stdout } = await execFileAsync(file, argv, {
     timeout: CLI_TIMEOUT_MS, windowsHide: true,
   });
   return stdout;
+}
+
+/**
+ * On Windows an npm-installed `claude` is `claude.cmd`, a batch shim, and
+ * `execFile` neither resolves PATHEXT nor will run a `.cmd` without a shell —
+ * measured as ENOENT, which the panel reports as `not on PATH` on a machine
+ * where `where claude` finds it. So it goes through `cmd.exe`, which does both.
+ * Safe only because every caller passes literals: nothing here is quoted, and
+ * the one string from another process (the email) never reaches this function.
+ */
+export function claudeCommand(
+  args: string[], platform: NodeJS.Platform = process.platform,
+): [string, string[]] {
+  return platform === 'win32'
+    ? ['cmd.exe', ['/d', '/s', '/c', 'claude', ...args]]
+    : ['claude', args];
 }
 
 /** Whatever the CLI said went wrong, in the fewest words that still locate it. */

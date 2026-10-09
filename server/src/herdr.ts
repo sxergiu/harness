@@ -183,11 +183,22 @@ let cachedSocketPath: string | undefined;
  */
 function socketPath(): string {
   if (cachedSocketPath === undefined) {
-    cachedSocketPath = process.env.HERDR_SOCKET_PATH
+    cachedSocketPath = pipeName(process.env.HERDR_SOCKET_PATH
       ?? reportedSocket()
-      ?? join(homedir(), '.config', 'herdr', 'herdr.sock');
+      ?? join(homedir(), '.config', 'herdr', 'herdr.sock'));
   }
   return cachedSocketPath;
+}
+
+/**
+ * `herdr status server --json` reports the Windows endpoint as a bare path —
+ * `C:\Users\…\herdr\herdr.sock` — while the server listens on the PIPE of that
+ * name, `\\.\pipe\C:\Users\…\herdr.sock`. Measured: the pipe is there, and the
+ * path itself is a 25-byte regular file, so connecting to it as given fails
+ * with ENOTSOCK. A name already in the pipe namespace is left alone.
+ */
+export function pipeName(path: string, platform: NodeJS.Platform = process.platform): string {
+  return platform === 'win32' && !path.startsWith('\\\\') ? `\\\\.\\pipe\\${path}` : path;
 }
 
 function reportedSocket(): string | undefined {

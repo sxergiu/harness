@@ -17,7 +17,8 @@ import { Aside } from './aside.js';
 import { Board } from './board.js';
 import { autoAcceptEnabled, setAutoAccept } from './chrome.js';
 import {
-  claudeFiles, configuredAlias, configuredEffort, hold, installClaudeFiles,
+  claudeFiles, configuredAlias, configuredEffort, hold, installClaudeFiles, pinnedAlias,
+  setPinnedAlias, settleSettings,
 } from './claudeFiles.js';
 import { buildAgentDiff, readAgentFile, touchedPaths } from './diff.js';
 import { Herdr } from './herdr.js';
@@ -471,8 +472,11 @@ app.post<{ Params: { paneId: string }; Body: { alias?: string } }>(
  *
  * `max` takes no hold: it is session-scoped in the CLI, which writes nothing
  * for it, so there is nothing about to move and a hold would wait out its whole
- * expiry for a write that never comes. No pane memory either — the level is
- * read back off the transcript, where the model needs an alias nothing records.
+ * expiry for a write that never comes.
+ *
+ * The level is also remembered against the pane, for the alias's reason: a
+ * `/effort` queues behind the whole turn at a busy agent, so until this the
+ * header answered with the level of a request made before the click.
  */
 app.post<{ Params: { paneId: string }; Body: { level?: string } }>(
   '/api/agents/:paneId/effort',
@@ -483,6 +487,7 @@ app.post<{ Params: { paneId: string }; Body: { level?: string } }>(
     }
     return act(reply, async () => {
       if (level !== 'max') hold('effortLevel', level, configuredEffort());
+      board.switchedEffort(req.params.paneId, level);
       await herdr.prompt(req.params.paneId, `/effort ${level}`);
     });
   },
@@ -568,7 +573,7 @@ app.post('/api/refresh', async () => {
  */
 app.post('/api/quit', async () => {
   broadcast({ type: 'quit' });
-  setImmediate(shutdown);
+  setImmediate(() => shutdown('POST /api/quit'));
   return { ok: true };
 });
 
@@ -869,7 +874,12 @@ app.post<{ Params: { id: string } }>('/api/tabs/:id/close', async (req, reply) =
  */
 const settingsView = (): SettingsView => ({
   rules: { text: rulesText(), isDefault: rulesAreDefault() },
-  model: { alias: modelDefault(), effort: configuredEffort() },
+  model: {
+    alias: modelDefault(),
+    pinned: pinnedAlias(),
+    configured: configuredAlias(),
+    effort: configuredEffort(),
+  },
   checkouts: projects.all(),
   claudeFiles: claudeFiles(),
   herdr: herdrRuleState(),
@@ -910,6 +920,40 @@ app.post<{ Body: { alias?: string } }>('/api/settings/model', async (req, reply)
     setModelDefault(alias);
   } catch (err) {
     return reply.code(500).send({ error: `could not save the model: ${(err as Error).message}` });
+  }
+  return settingsView();
+});
+
+/**
+ * The machine default itself — `~/.claude/settings.json`'s `model`, which every
+ * agent started by hand runs on and which `contextOf` falls back to for a pane
+ * whose own claim is gone. Setting it writes that key and holds it there on
+ * every later heartbeat, so a `/model` typed in any pane no longer moves it.
+ *
+ * Settled here as well as on the heartbeat so the view this answers with is
+ * already true — reporting a pin the file has not taken yet is the one thing
+ * this screen must not do, since the disagreement is what it exists to show.
+ *
+ * Blank UNPINS rather than clearing the key: the file keeps whatever it holds
+ * and is simply no longer defended, which is the state every install starts in.
+ * Clearing it would leave the machine with no default at all, which is worse
+ * than the drift this fixes.
+ *
+ * Same gate as the picker above and for a stronger reason — this name is read
+ * by agents this process never started, so one `claude` rejects fails starts
+ * the cockpit cannot see, in panes it did not open.
+ */
+app.post<{ Body: { alias?: string } }>('/api/settings/claude-model', async (req, reply) => {
+  const alias = req.body?.alias;
+  if (typeof alias !== 'string') return reply.code(400).send({ error: 'alias is required' });
+  if (alias !== '' && !(MODELS as readonly string[]).includes(alias)) {
+    return reply.code(400).send({ error: `model must be blank or one of ${MODELS.join(', ')}` });
+  }
+  try {
+    setPinnedAlias(alias);
+    settleSettings();
+  } catch (err) {
+    return reply.code(500).send({ error: `could not pin the model: ${(err as Error).message}` });
   }
   return settingsView();
 });
@@ -1178,9 +1222,10 @@ let shuttingDown = false;
  * alone: it may be half-finished in the browser, and closing it would leave
  * somebody logged out of everything with the way back gone.
  */
-function shutdown(): void {
+function shutdown(cause: string): void {
   if (shuttingDown) return;
   shuttingDown = true;
+  log(`shutting down on ${cause}`);
   release();
   void Promise.race([
     usage.close().catch(() => {}),
@@ -1191,4 +1236,23 @@ function shutdown(): void {
   });
 }
 
-for (const signal of ['SIGINT', 'SIGTERM'] as const) process.on(signal, shutdown);
+// SIGHUP is the console window or terminal pane closing — on Windows Node maps
+// the console's close event to it — and without a handler the process dies with
+// the lockfile left behind and nothing in the log.
+for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) process.on(signal, shutdown);
+
+/**
+ * A crash went only to the stderr of whatever window started the cockpit, which
+ * is usually gone by the time anyone asks why it died. Measured: a harness that
+ * vanished mid-session left a log ending at `herdr connected` and a lockfile
+ * naming a pid already reused by another process. Recording it here is the whole
+ * point of `harness.log`; the exit code is Node's own for an uncaught exception,
+ * and with this handler an unhandled rejection arrives here too.
+ */
+process.on('uncaughtException', (err) => {
+  log(`crashed: ${err.stack ?? err.message}`);
+  console.error(err);
+  release();
+  process.exit(1);
+});
+process.on('exit', (code) => log(`exited with code ${code}`));

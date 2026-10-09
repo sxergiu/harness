@@ -378,8 +378,9 @@ server/src/
   claudeFiles.ts      every file of Claude Code's OWN that we touch: the planner
                       subagent and the two commands, `harness init`, the trust
                       grant for the one folder that is ours, and settings.json —
-                      read for the model in force, written only to put back what
-                      a per-agent switch overwrote
+                      read for the model in force, written to put back what a
+                      per-agent switch overwrote and to hold the machine default
+                      wherever `~/.harness/claude-model` pins it
   herdrRules.ts       merges our one detection rule into Herdr's current manifest
   chrome.ts           answering that dialog with "allow" when the human has said
                       it may. The only key this cockpit presses on its own
@@ -741,6 +742,29 @@ foot of the board because that is where the bars that prompt it are.
   flag now either: that file had no other writer, so what agents start at is whatever the
   human's settings say, which is stable again. The settings screen shows that level read-only
   and names where it comes from.
+  **`~/.harness/claude-model` IS NOT THAT PINNING COMING BACK**, and the name is close enough
+  to need saying. The deleted one made a PER-AGENT action write the machine default — the
+  leak wearing a helpful face. This one is the opposite end: the human names a machine
+  default on the settings screen, and `settlePin` holds `~/.claude/settings.json` at it on
+  the board's heartbeat, which is the half the old note called missing ("covered nothing
+  started by hand"). It is the one thing that closes the window the `hold` leaves open —
+  a `/model` typed in a pane, or a harness restarted mid-hold, each of which moves that file
+  and tells this process nothing. Measured: the file sat on `haiku` while `~/.harness/model`
+  said `opus[1m]`, so every pane whose in-memory claim died with a restart fell back to a
+  200k window and the context meter jumped ~5× on every session under 200k — the ones over
+  it were rescued by the peak-widening, which is why only SOME moved and why it read as
+  random. **A pin waits for nothing, and that is what separates it from a hold.** A hold has
+  one write to catch and must watch for `want`, since restoring early leaves the switch's
+  value standing; a pin re-asserts every heartbeat, so a write that lands forty seconds later
+  is simply undone on the next one. Convergent, not timed — which is why it may sit on that
+  seam and could never be a `setTimeout`. It writes only on DRIFT: this runs every resync
+  against a file every running agent also writes, and writing unconditionally would be a
+  heartbeat loop over Claude Code's own settings. Under a pin the `hold` is redundant for
+  `model` and cannot disagree with it — what every switch finds is then the pinned value —
+  but it is kept, because it is still the whole defence when nothing is pinned and still the
+  whole defence for `effortLevel`, which is deliberately not pinnable. And what it promises
+  is bounded honestly: nothing stops Claude Code writing that key, so this puts it back
+  rather than locking it, and while the harness is down nothing does.
   **Two aliases can name it now, and the FAMILY is what decides between them.** The cockpit
   passes its own `--model` (`~/.harness/model`) to agents it starts, and the settings file
   names the rest, so each alias is a claim about every agent that is true of some of them.

@@ -655,6 +655,23 @@ export interface SettingsView {
   model: {
     alias: string | null;
     /**
+     * The alias the cockpit holds `~/.claude/settings.json` at, so the machine
+     * default is this screen's to set and nobody else's. Null is unpinned — the
+     * file is left wherever anything happens to put it, which is what it was
+     * before there was a pin at all.
+     *
+     * A separate claim from `alias` above and not a second view of it: that one
+     * is a flag on agents the cockpit starts, this one is the file every agent
+     * started by hand reads.
+     */
+    pinned: string | null;
+    /**
+     * What that file says right now. Carried beside `pinned` because the two
+     * disagreeing is the state this setting exists to end, and a screen showing
+     * only one of them could never say whether it had.
+     */
+    configured: string | null;
+    /**
      * The level agents start at, read from `~/.claude/settings.json` rather
      * than held here: no `--effort` is passed, so that file is the whole of the
      * answer. Shown and not settable, since setting it would be writing a file

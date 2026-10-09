@@ -4,7 +4,7 @@ import {
 } from '@harness/shared';
 import { ASIDE_PREFIX, asideName } from './aside.js';
 import { answerChromeDialog, forgetPane as forgetChromeDialog } from './chrome.js';
-import { settleHolds } from './claudeFiles.js';
+import { settleSettings } from './claudeFiles.js';
 import { touchedPaths } from './diff.js';
 import { asStatus, type Herdr, type PaneInfo } from './herdr.js';
 import type { History } from './history.js';
@@ -480,10 +480,11 @@ export class Board {
     // its parent's, and the loop below skips it as an instrument regardless.
     const forks = forkStatuses(panes, names);
 
-    // Where a per-agent switch gets undone. On this heartbeat rather than a
-    // timer of its own, because a `/model` queued behind a long turn lands at
-    // no time anybody can predict — see `settleHolds`.
-    settleHolds();
+    // Where a per-agent switch gets undone, and where a pinned machine default
+    // is put back. On this heartbeat rather than a timer of its own, because a
+    // `/model` queued behind a long turn lands at no time anybody can predict —
+    // see `settleHolds`, and `settlePin` for why the second needs no waiting.
+    settleSettings();
 
     const used = new Set<string>();
     const draft: Array<{ row: AgentRow; paths: string[] }> = [];

@@ -88,8 +88,21 @@ extends to any other checkout.`;
  * whose arguments contain a literal newline — "agent arguments cannot be
  * encoded safely for the target shell" — and fails the whole start rather than
  * dropping the flag. The numbering, or the paragraph, carries the structure.
+ *
+ * A straight `"` is refused the same way, for a reason Herdr does not catch: on
+ * Windows the start is typed at Windows PowerShell 5.1, which wraps a native
+ * argument in quotes WITHOUT escaping the ones inside it. Measured: rule 7's
+ * `("was X, now Y")` ended the argument at `(was`, `X,` arrived as claude's
+ * positional prompt — so every agent opened on a stray "X," — and everything
+ * after it, rule 8 and the git amendment included, was silently dropped. That
+ * is how a delegated checkout's agents kept refusing to commit. Curly quotes
+ * read the same to the model and mean nothing to any shell.
  */
-const flatten = (prompt: string): string => prompt.replace(/\s*\n\s*/g, ' ').trim();
+export const flatten = (prompt: string): string => prompt
+  .replace(/\s*\n\s*/g, ' ')
+  .replace(/"([^"]*)"/g, '“$1”')
+  .replace(/"/g, '”')
+  .trim();
 
 /**
  * Native `claude` flags, passed through Herdr's `agent start -- <args>`.

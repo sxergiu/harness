@@ -568,7 +568,7 @@ app.post('/api/refresh', async () => {
  */
 app.post('/api/quit', async () => {
   broadcast({ type: 'quit' });
-  setImmediate(shutdown);
+  setImmediate(() => shutdown('POST /api/quit'));
   return { ok: true };
 });
 
@@ -1178,9 +1178,10 @@ let shuttingDown = false;
  * alone: it may be half-finished in the browser, and closing it would leave
  * somebody logged out of everything with the way back gone.
  */
-function shutdown(): void {
+function shutdown(cause: string): void {
   if (shuttingDown) return;
   shuttingDown = true;
+  log(`shutting down on ${cause}`);
   release();
   void Promise.race([
     usage.close().catch(() => {}),
@@ -1191,4 +1192,23 @@ function shutdown(): void {
   });
 }
 
-for (const signal of ['SIGINT', 'SIGTERM'] as const) process.on(signal, shutdown);
+// SIGHUP is the console window or terminal pane closing — on Windows Node maps
+// the console's close event to it — and without a handler the process dies with
+// the lockfile left behind and nothing in the log.
+for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) process.on(signal, shutdown);
+
+/**
+ * A crash went only to the stderr of whatever window started the cockpit, which
+ * is usually gone by the time anyone asks why it died. Measured: a harness that
+ * vanished mid-session left a log ending at `herdr connected` and a lockfile
+ * naming a pid already reused by another process. Recording it here is the whole
+ * point of `harness.log`; the exit code is Node's own for an uncaught exception,
+ * and with this handler an unhandled rejection arrives here too.
+ */
+process.on('uncaughtException', (err) => {
+  log(`crashed: ${err.stack ?? err.message}`);
+  console.error(err);
+  release();
+  process.exit(1);
+});
+process.on('exit', (code) => log(`exited with code ${code}`));

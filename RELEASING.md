@@ -118,19 +118,46 @@ has a check that fails until the new file is named there.
 
 ## 3. Pull request, then squash
 
-One PR per branch, into `master`. The body says what the item is and what it does not cover;
-the known-and-not-fixed paragraph in `releases/0.2.2.md` is the tone.
+One PR per branch, into `master`.
+
+### Title
+
+A descriptive sentence naming what the reader gets, optionally prefixed `Feat:` or `Fix:`.
+
+```
+Feat: Display the running model for each agent box
+Fix: Submit a pasted prompt without a second Enter
+```
+
+**`[area][topic]` is the commit convention and does not belong here.** A commit subject is
+read inside the branch it belongs to, where the area narrows a diff somebody is already
+looking at. A PR title is read in a list of PRs by somebody deciding whether to open it, and
+a bracket prefix tells them nothing a sentence would not.
+
+### Body
+
+**Documentation, not a story.** It is read by somebody deciding whether this is correct and
+then living with it, not by somebody being told how the work went. So: what the change is,
+what it covers, what it deliberately does not, and anything a reviewer has to check by hand.
+State findings as facts rather than narrating how they were arrived at, and leave out the
+false starts entirely. The "Known, and not fixed here" section of `releases/0.2.2.md` is the
+shape.
 
 **CI must be green on all three platforms.** The matrix is macOS, Linux and Windows with
 `fail-fast: false`, and it is the only evidence behind the claim that anybody may install this.
 A red Windows leg is not a flake to re-run, it is the release's Windows claim being false —
 that is what 0.2.2 exists to fix.
 
-**Merge by squash**, so `master` gets one commit per item with the PR number appended:
+**Merge by squash**, so `master` gets one commit per item with the PR number appended. GitHub
+takes the PR **title** as that subject, so this is the one place the two conventions meet and
+the PR title is what lands:
 
 ```
-[web][files] open a file the agent named, and three fixes under it (#3)
+Feat: Display the running model for each agent box (#4)
 ```
+
+`[web][files] open a file the agent named, and three fixes under it (#3)` predates this and is
+not the model to copy.
 
 `gh` is installed (2.101.0). Prepare the command; the human runs it:
 
@@ -191,12 +218,16 @@ It touches exactly four things:
 
 ### Writing the notes
 
-Read `releases/0.2.1.md` and `releases/0.2.2.md` before writing a new one. What makes them
-work:
+**Documentation, not a story** — the same rule as a PR body, and for the same reader: somebody
+deciding whether to take this version and what it changes for them.
 
-- **Lead with the thing somebody was hit by**, not the biggest diff.
-- **One `##` section per item**, titled as the problem rather than the patch.
-- Say what was **measured**. Numbers, the exact wrong behaviour, what was observed.
+- **One `##` section per item**, titled by its subject.
+- **Lead each section with what changed**, then what it affects, then the evidence. Not the
+  order the work happened in, and never a finding saved for a reveal.
+- **Lead the file with what a reader is most likely to be hit by**, not the biggest diff.
+- Say what was **measured** — numbers, the exact wrong behaviour, what was observed — as a
+  stated fact rather than an account of finding it. No first person, no debugging narrative,
+  no false starts.
 - Say what was **not** fixed. `0.2.2` has a "Known, and not fixed here" section and it is the
   most useful part of the file.
 - Say when production was never affected, plainly, rather than letting a fix imply an outage.
@@ -258,7 +289,8 @@ After it lands, `npm view @sxergiu/harness version` is the confirmation.
 [ ] each item on feat/<slug>, >=3 commits (1-2 only for a genuinely small fix)
 [ ] new test files named in the `test` script
 [ ] four gates green locally on every branch
-[ ] one PR per item, CI green on macOS + Linux + Windows
+[ ] one PR per item, title a descriptive sentence (Feat:/Fix:), body documentation not story
+[ ] CI green on macOS + Linux + Windows
 [ ] squash-merged into master with (#N)
 [ ] stale feat/* branches deleted, local and remote
 [ ] release commit: package.json, package-lock.json, releases/<v>.md, CHANGELOG.md row

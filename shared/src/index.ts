@@ -41,12 +41,29 @@ export const MODELS = ['opus', 'opus[1m]', 'sonnet', 'sonnet[1m]', 'haiku', 'fab
 export type ModelAlias = typeof MODELS[number];
 
 /**
+ * Whether a model id is of the family an alias names — `opus` and `opus[1m]`
+ * both run `claude-opus-5`, and neither is distinguishable from the other in a
+ * transcript.
+ *
+ * Shared because both sides ask this same question of the same pair and a second
+ * copy would be free to answer differently: the server refuses the 1M window to
+ * a session plainly not on that model (`windowFor`), and the header decides on it
+ * whether a switch has reached a request yet. A model not read yet MATCHES —
+ * there is nothing measured to contradict the alias, and treating silence as a
+ * mismatch would show every fresh agent as mid-switch.
+ */
+export function aliasRuns(alias: string, model: string | null): boolean {
+  return model === null || model.includes(alias.replace('[1m]', ''));
+}
+
+/**
  * How hard the model is asked to think, the five levels `claude --effort` takes.
  *
  * Unlike an alias, a level is not honoured as asked. Claude Code CAPS it at the
  * model's own ceiling and writes the capped value, and a model with no effort at
- * all — measured on `claude-haiku-4-5` — records none. So what an agent runs at
- * is only ever read back off its transcript, never from what was chosen.
+ * all — measured on `claude-haiku-4-5` — records none. So a level that has been
+ * chosen stands only until the pane's next request, which either agrees with it
+ * or replaces it with what the cap allowed (`effortDisproven`).
  *
  * `max` is the one that does not persist: `/effort max` sets the session and
  * writes nothing to `~/.claude/settings.json`, where the other four are saved as
@@ -154,10 +171,41 @@ export interface AgentRow {
    */
   model: string | null;
   /**
-   * What that same request ran at, off the same entry as `model` so the two
-   * always describe one request. Null is a real answer and not just an unread
-   * one: a model with no effort level records none, and reporting the level of
-   * an older request beside a newer model would be a claim about neither.
+   * What THIS pane was asked to run on — the alias a switch sent it, else the
+   * `--model` the cockpit started it with. Null for an agent somebody started by
+   * hand, where the settings file is the only claim there is and it is a claim
+   * about every agent rather than this one.
+   *
+   * A REQUEST and not a measurement, which is why it is carried beside `model`
+   * rather than replacing it — but an UNREFUTED one, so the header may state it as
+   * the model in force. The server drops it as soon as one of the pane's own
+   * requests contradicts it (`aliasDisproven`), which is what a refused alias and
+   * a `/model` typed in the pane both amount to from here.
+   *
+   * It is the only thing that knows what `model` cannot: that a session runs on
+   * the 1M window (`opus` and `opus[1m]` record the same id), and what a switch
+   * moved the pane to before a request has been worked on it. Without it a picker
+   * click moved nothing on screen until the agent next worked, and an
+   * `opus` ⇄ `opus[1m]` switch moved nothing ever.
+   *
+   * In memory against a pane id server-side, so it is applied on the way out
+   * (`agents()`) like the shade and the lock, and RECENT never carries one.
+   */
+  alias: string | null;
+  /**
+   * What the pane is running AT: the level it was switched to while that ask
+   * stands unrefuted, else what its last request actually ran at — read off the
+   * same entry as `model`, so the pair always describes one request.
+   *
+   * Resolved server-side, where `model` and `alias` travel separately, and the
+   * asymmetry is deliberate: an alias states two things a transcript cannot
+   * (`[1m]`, and the family before a request has run), while a level asked and a
+   * level measured are the same five words. One field is therefore the whole
+   * answer, and a second would be a second opinion for the browser to weigh.
+   *
+   * Null is a real answer and not just an unread one: a model with no effort
+   * level records none, and reporting the level of an older request beside a
+   * newer model would be a claim about neither.
    */
   effort: string | null;
   /**

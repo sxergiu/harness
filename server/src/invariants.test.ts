@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { test } from 'node:test';
-import { sameAccount } from '@harness/shared';
+import { aliasRuns, sameAccount } from '@harness/shared';
 import { parse as parseAccounts, rowFor, statusOf } from './account.js';
 import { seedCwd } from './board.js';
 import { HOLD_MS, decide, holdFor, pinAction, settleAction } from './claudeFiles.js';
@@ -15,9 +15,9 @@ import { isOurs, merge, versionOf } from './herdrRules.js';
 import { shouldOpen, type Running } from './instance.js';
 import { admits, isLocal } from './origin.js';
 import { parse } from './projects.js';
-import { argsFor, modelFrom, rulesFor } from './rules.js';
+import { argsFor, DEFAULT_RULES, flatten, modelFrom, rulesFor } from './rules.js';
 import {
-  contextOf, effortOf, goalOf, modelOf, slugForCwd, windowFor, type Entry,
+  aliasDisproven, contextOf, effortDisproven, effortOf, goalOf, modelOf, slugForCwd, windowFor, type Entry,
 } from './transcript.js';
 import { cropPanel, limitsOf } from './usage.js';
 
@@ -361,6 +361,16 @@ test('no stored model means no flag at all', () => {
   );
 });
 
+test('the system prompt carries no straight double quote', () => {
+  // Windows PowerShell 5.1 does not escape one inside a native argument, so it
+  // ends the argument there and drops everything after — the git amendment
+  // included — with nothing anywhere saying so.
+  const [, prompt] = argsFor(rulesFor(DEFAULT_RULES, true), null);
+  assert.ok(!prompt.includes('"'));
+  assert.ok(prompt.endsWith('Nothing here extends to any other checkout.'));
+  assert.equal(flatten('a ("was X, now Y") b "c'), 'a (“was X, now Y”) b ”c');
+});
+
 test('a blank or newline-bearing model file is no choice', () => {
   assert.equal(modelFrom('  \n '), null);
   // Invariant 11: Herdr fails the whole `agent.start` on a newline, with an
@@ -445,6 +455,54 @@ test('the effort is read off the same request as the model, never an older one',
   assert.equal(effortOf(entries.slice(0, 1)), 'high');
 });
 
+/** One turn: the human's prompt at `iso`, and a request answering it a second later. */
+const turnAt = (iso: string, request: Omit<Entry, 'type'>): Entry[] => [
+  { type: 'user', timestamp: iso, message: { content: 'go on' } },
+  { type: 'assistant', timestamp: new Date(Date.parse(iso) + 1000).toISOString(), ...request },
+];
+
+test('a level asked for is answered by the cap as surely as by a refusal', () => {
+  const at = (iso: string, effort?: string): Entry[] =>
+    turnAt(iso, { effort, message: { model: 'claude-opus-5' } });
+  const asked = Date.parse('2026-09-29T12:00:00.000Z');
+
+  // Same ordering rule as the alias: a turn opened before the ask is at the old
+  // level by definition, and reading it as evidence would drop every switch the
+  // instant it was made.
+  assert.equal(effortDisproven(at('2026-09-29T11:59:59.000Z', 'high'), 'max', asked), false);
+  // The ask honoured.
+  assert.equal(effortDisproven(at('2026-09-29T12:00:01.000Z', 'max'), 'max', asked), false);
+  // Claude Code CAPS the level at the model's ceiling and records what it
+  // allowed. That is an answer, not a disagreement to argue with — left
+  // standing, the header would report a level no request has ever run at.
+  assert.equal(effortDisproven(at('2026-09-29T12:00:01.000Z', 'high'), 'max', asked), true);
+  // ABSENCE IS THE MEASUREMENT, which is the one place this parts company with
+  // `aliasDisproven`: a model with no effort level records none, so a request
+  // carrying nothing says the level is gone rather than saying nothing at all.
+  assert.equal(effortDisproven(at('2026-09-29T12:00:01.000Z'), 'high', asked), true);
+  // Nothing to check against still proves nothing — a fresh session, a pruned
+  // transcript, an entry with no usable timestamp.
+  assert.equal(effortDisproven([], 'high', asked), false);
+  assert.equal(
+    effortDisproven([{ type: 'assistant', message: { model: 'claude-opus-5' } }], 'high', asked),
+    false,
+  );
+});
+
+test('a switch queued behind a turn is not refused by the rest of that turn', () => {
+  // A `/model` or `/effort` sent to a busy agent waits for the turn to end, and
+  // every request the turn makes meanwhile is AFTER the ask and on the old
+  // values. Counting those dropped the switch while it was still queued.
+  const asked = Date.parse('2026-09-29T12:00:00.000Z');
+  const busy = turnAt('2026-09-29T11:59:00.000Z', {});
+  busy[1] = {
+    type: 'assistant', timestamp: '2026-09-29T12:00:05.000Z', effort: 'high',
+    message: { model: 'claude-opus-5' },
+  };
+  assert.equal(aliasDisproven(busy, 'sonnet', asked), false);
+  assert.equal(effortDisproven(busy, 'max', asked), false);
+});
+
 test('the 1M window is refused to a session not on that model', () => {
   // The settings alias is machine-wide and true of at most some agents, since a
   // `/model` typed at one rewrites it for all of them.
@@ -454,6 +512,55 @@ test('the 1M window is refused to a session not on that model', () => {
   // Nothing read yet leaves the alias standing alone, as it did before there
   // was anything to check it against.
   assert.equal(windowFor(null, 'opus[1m]'), 1_000_000);
+});
+
+test('an alias names a family, which is what refines a measured model', () => {
+  // The header reads this for what `windowFor` short-circuits past — a non-1M
+  // alias, which never reaches the family test through the window at all. Both
+  // wrong answers are silent: a `1M` marker on a session that does not have one,
+  // or an exact model id shown for a family the pane is no longer running.
+  assert.equal(aliasRuns('opus', 'claude-opus-5'), true);
+  assert.equal(aliasRuns('opus[1m]', 'claude-opus-5'), true);
+  assert.equal(aliasRuns('sonnet', 'claude-opus-5'), false);
+  // A real haiku id is dated, so the family is a substring of it and not an
+  // equality — measured `claude-haiku-4-5-20251001`.
+  assert.equal(aliasRuns('haiku', 'claude-haiku-4-5-20251001'), true);
+  // Nothing measured contradicts the alias, so a fresh agent is not mid-switch.
+  assert.equal(aliasRuns('sonnet', null), true);
+});
+
+test('ONLY A REQUEST AFTER THE ASK CAN DISPROVE IT, which is what makes the label current', () => {
+  const at = (iso: string, model: string): Entry[] => turnAt(iso, { message: { model } });
+  const asked = Date.parse('2026-09-29T12:00:00.000Z');
+
+  // The request BEFORE a switch is of the old model by definition. Reading it as
+  // evidence calls every switch refused the instant it is made, which puts the
+  // header back to showing the model the agent has just been moved off.
+  assert.equal(
+    aliasDisproven(at('2026-09-29T11:59:58.000Z', 'claude-opus-5'), 'sonnet', asked),
+    false,
+  );
+  // A turn opened after it, on another family: the ask did not take — refused in
+  // the pane, or overridden by a `/model` typed there. Left standing, it would be
+  // reported as the current model for the life of the pane.
+  assert.equal(
+    aliasDisproven(at('2026-09-29T12:00:01.000Z', 'claude-opus-5'), 'sonnet', asked),
+    true,
+  );
+  // The ask honoured. `[1m]` is invisible in a transcript, so the family is all
+  // there is to agree with, and disagreeing here would drop the only record that
+  // the session has the wider window.
+  assert.equal(
+    aliasDisproven(at('2026-09-29T12:00:01.000Z', 'claude-opus-5'), 'opus[1m]', asked),
+    false,
+  );
+  // Nothing to check against proves nothing: a fresh session, a pruned
+  // transcript, an entry with no usable timestamp. The claim stands.
+  assert.equal(aliasDisproven([], 'sonnet', asked), false);
+  assert.equal(
+    aliasDisproven([{ type: 'assistant', message: { model: 'claude-opus-5' } }], 'sonnet', asked),
+    false,
+  );
 });
 
 test('the window follows what is KNOWN of the pane, and the family check binds it too', () => {

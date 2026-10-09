@@ -9,7 +9,7 @@ import type { FileViewer } from './fileRef.js';
 import { FileView } from './FileView.js';
 import { ContextMeter, Spinner, StatusDot, Working } from './Status.js';
 import { SubagentsTab } from './Subagents.js';
-import { modelLabel, modelName, since, useApi } from './useHarness.js';
+import { modelLabel, modelReading, since, useApi } from './useHarness.js';
 
 /**
  * The one-line height of the prompt field in px: 1px border + `py-1` + one
@@ -170,9 +170,14 @@ function CommandField(
  * an idle agent, the rest of the turn at a busy one — where the file does hold
  * this alias and an agent started by hand would inherit it.
  *
- * Nothing is read back afterwards. A cross-family switch on an agent that has
- * already worked raises Claude Code's own `Switch model?` confirm, which the
- * agent shows and the human answers in the pane or the blocked panel.
+ * The label is **what the pane is running now**, from the alias and the transcript
+ * together — see `modelReading`. It is not a record of the switch: an alias the
+ * pane's own later requests contradict is dropped server-side, which is what a
+ * refused alias and a `/model` typed in the pane both look like from here. The one
+ * case neither signal covers is Claude Code's `Switch model?` confirm on a
+ * cross-family switch at an agent that has already worked — the agent shows it and
+ * the human answers it in the pane or the blocked panel, and until they do the
+ * label reads as the switch they asked for.
  */
 function ModelPicker(
   { agent, onPick, onEffort }: {
@@ -182,13 +187,15 @@ function ModelPicker(
   },
 ): React.ReactElement | null {
   const [open, setOpen] = useState(false);
-  // An agent that has not answered yet has no model to report, and a pruned
-  // transcript never will — but either can still be asked to switch, so the
-  // control stays and only its label goes unknown.
-  const name = agent.model ? modelName(agent.model) : 'model';
-  // Read off the same request as the model, so the pair never describes two.
-  // Absent is a state of its own and reads as one: a model with no effort level
-  // shows the name alone rather than a placeholder standing in for a fact.
+  // An agent that has neither been asked for a model nor answered a request has
+  // nothing to report, and a pruned transcript never will — but either can still
+  // be asked to switch, so the control stays and only its label goes unknown.
+  const name = modelReading(agent.model, agent.alias);
+  // One state like the name beside it, and resolved the same way — the server
+  // hands over the level asked for while that ask stands, and what the last
+  // request ran at once it does not. Absent is a state of its own and reads as
+  // one: a model with no effort level shows the name alone rather than a
+  // placeholder standing in for a fact.
   const label = agent.effort ? `${name} ·${agent.effort}` : name;
 
   // A closed agent still ran on something; it just cannot be asked to change.
@@ -203,34 +210,41 @@ function ModelPicker(
       <button
         onClick={() => setOpen(!open)}
         className={open ? 'text-neutral-200' : 'text-neutral-600 hover:text-neutral-300'}
-        title="What this agent's last request ran on, and what it ran at. The transcript cannot say whether the window is 200k or 1M, and a model with no effort level records none."
+        title="What this agent is running, and at what effort. Both are what the pane was asked for until one of its own requests says otherwise — a refused model, or a level the model capped, is dropped rather than left standing. A transcript cannot say whether the window is 200k or 1M, so that comes from the alias this pane was given; a model with no effort level records none."
       >
         {label}
       </button>
       {open && (
-        <div className="absolute left-0 top-6 z-10 w-80 rounded border border-neutral-800 bg-neutral-900 p-2">
-          <p className="mb-1.5 text-amber-400">
-            Applies to this agent. Claude Code saves either to
-            ~/.claude/settings.json as your default for new sessions, so the
-            cockpit puts that file back afterwards — until it does, an agent you
-            start by hand picks this up.
-          </p>
+        <div className="absolute left-0 top-6 z-10 w-72 rounded border border-neutral-800 bg-neutral-900 p-2">
+          {/* Ticked on the alias this pane was ASKED for, which is also what the
+              header's label reads while nothing has contradicted it.
+
+              Offered unfiltered because entitlement is the account's and this
+              cannot enumerate it — the same reason the settings default passes
+              whatever it is given straight through. Only `fable` is marked,
+              because it is the one whose cost a human would want to know before
+              the click rather than after it. */}
           {MODELS.map((m) => (
             <button
               key={m}
               onClick={() => { setOpen(false); onPick(m); }}
-              className="block w-full rounded px-1 py-0.5 text-left text-neutral-300 hover:bg-neutral-800"
+              className={`flex w-full items-center gap-1 rounded px-1 py-0.5 text-left ${
+                agent.alias === m
+                  ? 'bg-neutral-800 text-neutral-100'
+                  : 'text-neutral-300 hover:bg-neutral-800'
+              }`}
             >
-              {modelLabel(m)}
+              <span className="truncate">{modelLabel(m)}</span>
+              {m === 'fable' && (
+                <span
+                  className="shrink-0 text-amber-500"
+                  title="The most capable model and the dearest — twice opus a token, so it draws the limit bars down fastest. Access is the account's: one without it refuses the switch in the pane."
+                >
+                  ⚠
+                </span>
+              )}
             </button>
           ))}
-          {/* Offered unfiltered because entitlement is the account's and this
-              cannot enumerate it — the same reason the settings default passes
-              whatever it is given straight through. */}
-          <p className="mt-1 text-neutral-600">
-            An alias is a request. One this account has no access to is refused in the
-            pane, in the CLI’s own words.
-          </p>
           {/* One popover rather than a second control in the header strip: the
               level is a property of how the model runs, not a fact beside it. */}
           <div className="mt-1.5 flex items-center gap-1 border-t border-neutral-800 pt-1.5">

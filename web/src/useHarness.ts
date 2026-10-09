@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { AgentRow, ServerEvent, WorkspaceRow } from '@harness/shared';
+import { aliasRuns, type AgentRow, type ServerEvent, type WorkspaceRow } from '@harness/shared';
 
 export interface HarnessState {
   workspaces: WorkspaceRow[];
@@ -180,6 +180,31 @@ export const modelName = (model: string): string => model.replace(/^claude-/, ''
  * model's standard window, and only the 1M one has been established here.
  */
 export const modelLabel = (alias: string): string => alias.replace('[1m]', ' · 1M context');
+
+/**
+ * What one agent is running NOW, in the width of a header field. One state, never
+ * a transition: `opus-5 → sonnet` says how it started and how it is going, and
+ * what you want off a board is which model your next request goes to.
+ *
+ * Two facts say it and neither is enough alone. The TRANSCRIPT is measured but
+ * past tense — the model of the last request, so it is the old one for as long as
+ * a switch has not been worked yet, and it cannot spell `[1m]` at all, since
+ * `opus` and `opus[1m]` both record `claude-opus-5`. The ALIAS is present tense
+ * but a claim — what the pane was asked to run — and the server keeps it only
+ * while the pane's own requests have not contradicted it (`aliasDisproven`), so a
+ * refused alias and a `/model` typed in the pane both fall back here rather than
+ * being reported as current forever.
+ *
+ * So: the alias is the answer, and the transcript refines it wherever a request
+ * of that family has actually run — which is the exact model id, version and all.
+ * Nothing asked for leaves the transcript to answer alone, which is every agent
+ * somebody started by hand.
+ */
+export function modelReading(model: string | null, alias: string | null): string {
+  if (!alias) return model ? modelName(model) : 'model';
+  if (!model || !aliasRuns(alias, model)) return alias;
+  return alias.includes('[1m]') ? `${modelName(model)} 1M` : modelName(model);
+}
 
 /** "12m" / "3h" — time in the current state, which is what the board reports. */
 export function since(iso: string | null): string {

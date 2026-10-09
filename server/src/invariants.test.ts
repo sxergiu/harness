@@ -15,7 +15,7 @@ import { isOurs, merge, versionOf } from './herdrRules.js';
 import { shouldOpen, type Running } from './instance.js';
 import { admits, isLocal } from './origin.js';
 import { parse } from './projects.js';
-import { argsFor, modelFrom, rulesFor } from './rules.js';
+import { argsFor, DEFAULT_RULES, flatten, modelFrom, rulesFor } from './rules.js';
 import {
   aliasDisproven, contextOf, effortDisproven, effortOf, goalOf, modelOf, slugForCwd, windowFor, type Entry,
 } from './transcript.js';
@@ -359,6 +359,16 @@ test('no stored model means no flag at all', () => {
     argsFor('RULES', 'sonnet[1m]'),
     ['--append-system-prompt', 'RULES', '--model', 'sonnet[1m]'],
   );
+});
+
+test('the system prompt carries no straight double quote', () => {
+  // Windows PowerShell 5.1 does not escape one inside a native argument, so it
+  // ends the argument there and drops everything after — the git amendment
+  // included — with nothing anywhere saying so.
+  const [, prompt] = argsFor(rulesFor(DEFAULT_RULES, true), null);
+  assert.ok(!prompt.includes('"'));
+  assert.ok(prompt.endsWith('Nothing here extends to any other checkout.'));
+  assert.equal(flatten('a ("was X, now Y") b "c'), 'a (“was X, now Y”) b ”c');
 });
 
 test('a blank or newline-bearing model file is no choice', () => {

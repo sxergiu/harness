@@ -3,7 +3,7 @@ import {
 } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, isAbsolute, join, relative, sep } from 'node:path';
-import type { AgentStatus, ContextUse, FeedEntry, FeedTurn, SubagentRow } from '@harness/shared';
+import { aliasRuns, type AgentStatus, type ContextUse, type FeedEntry, type FeedTurn, type SubagentRow } from '@harness/shared';
 import { configuredAlias } from './claudeFiles.js';
 import { sqlOf } from './sql.js';
 
@@ -229,6 +229,51 @@ export function modelOf(entries: Entry[]): string | null {
 }
 
 /**
+ * Whether a request that ran AFTER `since` ran on something other than `alias` —
+ * which is the only evidence there is that a remembered alias has stopped being
+ * true of the pane.
+ *
+ * An alias is what the pane was ASKED to run: a `/model` from the header, or the
+ * `--model` a start passed. Two things quietly falsify one, and the header reads
+ * it as the current model, so neither may be allowed to stand:
+ *
+ * - an alias the account has no access to is REFUSED in the pane, and the agent
+ *   carries on running what it was;
+ * - a `/model` the human types in the pane themselves moves the session and tells
+ *   this process nothing.
+ *
+ * `since` is what makes this evidence rather than a coincidence — see
+ * `answeredSince`, which is the whole ordering rule.
+ */
+export function aliasDisproven(entries: Entry[], alias: string, since: number): boolean {
+  const model = answeredSince(entries, since)?.message?.model;
+  return !!model && !aliasRuns(alias, model);
+}
+
+/**
+ * The newest request, if it belongs to a turn OPENED after `since` — else null,
+ * which proves nothing and leaves a claim standing.
+ *
+ * The turn and not the request, because a `/model` or `/effort` sent to a busy
+ * agent queues behind the whole turn, and every request that turn makes
+ * meanwhile is later than the ask and still on the old values. Timing the
+ * request dropped every switch made at a working agent while it was queued. A
+ * turn opens on any user entry with text, which includes the slash command
+ * itself once it runs; tool results carry none and open nothing. An
+ * unparseable or absent timestamp proves nothing either.
+ */
+function answeredSince(entries: Entry[], since: number): Entry | null {
+  const request = lastRequest(entries);
+  if (!request) return null;
+  for (let i = entries.lastIndexOf(request) - 1; i >= 0; i--) {
+    const e = entries[i];
+    if (!e || e.isSidechain || e.isMeta || e.type !== 'user' || userText(e) === null) continue;
+    return Date.parse(e.timestamp ?? '') > since ? request : null;
+  }
+  return null;
+}
+
+/**
  * The entry both readers answer from, so that what they say is of ONE request
  * by construction rather than by two loops agreeing. A filter that changed in
  * one and not the other would pair a model with an older request's effort, and
@@ -253,6 +298,27 @@ function lastRequest(entries: Entry[]): Entry | null {
  */
 export function effortOf(entries: Entry[]): string | null {
   return lastRequest(entries)?.effort ?? null;
+}
+
+/**
+ * The same evidence rule as `aliasDisproven`, over the level instead of the
+ * model — whether a request that ran AFTER `since` ran at something other than
+ * `level`, which is the only thing that can answer an ask nothing else observes.
+ *
+ * A level is falsified by MORE than an alias is, and the extra way is the whole
+ * reason this cannot be `aliasDisproven`'s twin: Claude Code CAPS the level at
+ * the model's own ceiling and records the capped value, so `max` asked of a
+ * model that stops at `high` comes back `high` and the cap is the truth. A model
+ * with no level at all records NONE — measured on `claude-haiku-4-5` — and that
+ * absence is itself a measurement, not a silence, which is why a missing
+ * `effort` disproves here where a missing `model` proves nothing there.
+ *
+ * `since` carries the same ordering rule (`answeredSince`) and for the same
+ * reason: a turn opened before an ask is at the old level by definition.
+ */
+export function effortDisproven(entries: Entry[], level: string, since: number): boolean {
+  const e = answeredSince(entries, since);
+  return e !== null && (e.effort ?? null) !== level;
 }
 
 /**
@@ -314,8 +380,7 @@ export function contextOf(entries: Entry[], known: string | null): ContextUse | 
  */
 export function windowFor(model: string | null, alias: string | null): number {
   if (alias === null || !alias.includes('[1m]')) return WINDOW;
-  const family = alias.replace('[1m]', '');
-  return model === null || model.includes(family) ? WINDOW_1M : WINDOW;
+  return aliasRuns(alias, model) ? WINDOW_1M : WINDOW;
 }
 
 /** The newest tool call, as a line you can read at a glance. */

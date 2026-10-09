@@ -761,6 +761,50 @@ foot of the board because that is where the bars that prompt it are.
   the meter falls back to the default and the peak-widening recovers the rest. `startArgs`
   therefore takes the alias from its caller rather than reading the file itself: two reads are
   free to disagree, and the pane would then be remembered as running what it was never given.
+  **The HEADER reads that same chain, and not reading it was a live bug.** The label was the
+  transcript's model alone, which is the one thing that cannot say `[1m]` — so switching
+  `opus[1m]` → `opus` changed nothing on screen ever, while the meter beside it silently
+  changed window, and any other switch changed nothing until the agent's next request, which
+  reads as a picker click that did nothing. `aliasFor` is now the one expression behind both,
+  because a name and a window resolving the same chain differently is two answers to one
+  question. It reaches the browser as `AgentRow.alias`, applied in `agents()` beside the shade
+  and the lock — pane-keyed, in memory, and so never on a remembered row.
+  **It says what the pane is running NOW, and never how it got there.** `modelReading` takes
+  the alias as the answer and lets the transcript refine it wherever a request of that family
+  has actually run, which is where the exact id and version come from; `opus-5 → sonnet` was
+  the first attempt and it was wrong, because a transition is not what you want off a board —
+  one state is. That only works because the alias is kept UNREFUTED: `aliasDisproven` drops it
+  the moment one of the pane's own requests contradicts it, which is what a refused alias and a
+  `/model` typed in the pane each amount to from here, and `settleClaims` tests the switch and
+  the launch SEPARATELY so a disproven switch uncovers the `--model` still under it. The
+  ordering is the whole of it — the request before an ask is of the old model by definition, so
+  comparing families alone calls every switch refused the instant it is made, which is the
+  reading this replaced. **It is ordered on the TURN, not the request** (`answeredSince`): a
+  switch sent to a busy agent queues behind the whole turn, whose remaining requests all land
+  after the ask on the old model, and timing the request dropped every switch made at a working
+  agent while it was still queued. `aliasRuns` is in `shared` because both sides ask it of the same pair;
+  the header's use of it hits the non-1M case, which `windowFor` short-circuits past, so it is
+  pinned separately, as is the ordering rule. What survives none of this is Claude Code's own
+  `Switch model?` confirm: until the human answers it in the pane, the label reads as the
+  switch they asked for.
+  **THE LEVEL IS A CLAIM ON THE SAME TERMS, and its disproof is a DIFFERENT RULE.** A
+  `/effort` queues behind the whole turn exactly as a `/model` does, so reading it off the
+  transcript alone left the header answering with a request made before the click — the
+  picker-did-nothing bug, at the other half of the same popover. `effortSwitchedTo` records
+  what was asked and `settleClaims` drops it when a later request disagrees, pane-keyed and
+  in memory like the two above. But `effortDisproven` is not `aliasDisproven` over a
+  different field: Claude Code CAPS the level at the model's ceiling and records what it
+  allowed, so an `xhigh` that comes back `high` was ANSWERED rather than refused, and a
+  model with no level records NONE — which makes absence the measurement here where it is
+  silence there. Both differences drop the claim, and both are right to: what stands after
+  is what actually ran. There is no launch twin, since no `--effort` is passed.
+  **It is RESOLVED into `AgentRow.effort` rather than carried beside it**, which is the one
+  place this deliberately parts from the model. `alias` travels next to `model` because it
+  states two things a transcript cannot — `[1m]`, and the family before a request has run —
+  so the browser needs both to compute one reading. A level asked and a level measured are
+  the same five words, so a second field would only be a second opinion to weigh; `agents()`
+  applies the claim on the way out, beside the shade and the lock and for their reason, and
+  RECENT keeps the measured value by construction.
 - **The Tailwind ramp IS the theme, and light mode is one CSS block.** Every colour class
   resolves to `var(--color-*)` — verified in the compiled output, including opacity
   modifiers, which become `color-mix(in oklab, var(--color-teal-700) 35%, …)` inside an

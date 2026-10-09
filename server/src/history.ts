@@ -85,15 +85,18 @@ export class History {
  * fields would be restating `AgentRow` in a second place for a cache whose
  * every other field is already rendered defensively.
  *
- * FILLING IN a field is not validating one, and the two nullable fields added
- * after this format existed are filled: a row written before them carries
- * `undefined` where `AgentRow` promises `string | null`. Nothing renders
- * differently — both are falsy, and a closed agent whose model we never read
- * correctly shows none — but the type is the contract every later reader works
- * from, and one comparing `model === null` on a remembered row would find a
- * case the type says cannot exist. Bumping `VERSION` is the other way to make
- * this true and is the wrong one: it would discard every remembered row to fix
- * a field none of them renders.
+ * FILLING IN a field is not validating one, and the nullable fields added after
+ * this format existed are filled: a row written before them carries `undefined`
+ * where `AgentRow` promises `string | null`. Nothing renders differently — all
+ * are falsy, and a closed agent whose model we never read correctly shows none —
+ * but the type is the contract every later reader works from, and one comparing
+ * `model === null` on a remembered row would find a case the type says cannot
+ * exist. Bumping `VERSION` is the other way to make this true and is the wrong
+ * one: it would discard every remembered row to fix a field none of them renders.
+ *
+ * `alias` is filled rather than kept, and that is a statement: it belongs to a
+ * LIVE pane, `agents()` is its only author, and a closed agent inherits nothing
+ * from whoever holds that pane id next.
  */
 export function parse(text: string): AgentRow[] {
   const doc = JSON.parse(text) as unknown;
@@ -110,5 +113,5 @@ export function parse(text: string): AgentRow[] {
       typeof r === 'object' && r !== null
       && typeof (r as AgentRow).paneId === 'string'
       && typeof (r as AgentRow).name === 'string')
-    .map((r) => ({ ...r, model: r.model ?? null, effort: r.effort ?? null }));
+    .map((r) => ({ ...r, model: r.model ?? null, effort: r.effort ?? null, alias: null }));
 }

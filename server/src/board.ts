@@ -304,8 +304,13 @@ export class Board {
     }
   }
 
+  /**
+   * Less whatever is on the board under the same pane id — a dormant pane's
+   * conversation was remembered when it vanished, and the browser keys rows on
+   * pane id, so showing both would put one conversation in two places.
+   */
   recent(): AgentRow[] {
-    return this.history.all();
+    return this.history.all().filter((r) => !this.rows.has(r.paneId));
   }
 
   workspaceRows(): WorkspaceRow[] {
@@ -444,9 +449,11 @@ export class Board {
     let panes: PaneInfo[];
     let workspaces: WorkspaceRow[];
     let names: Map<string, string>;
+    let tabLabels: Map<string, string | null>;
     try {
       const snap = await this.herdr.snapshot();
       panes = snap.panes;
+      tabLabels = new Map((snap.tabs ?? []).map((t) => [t.tab_id, t.label]));
       names = new Map(
         (snap.agents ?? [])
           .filter((a): a is { pane_id: string; name: string } => typeof a.name === 'string')
@@ -490,14 +497,16 @@ export class Board {
     const draft: Array<{ row: AgentRow; paths: string[] }> = [];
 
     for (const p of panes) {
-      if (!p.agent) continue;
+      const tabLabel = tabLabels.get(p.tab_id);
+      const dormant = p.agent ? null : dormantSession(p, tabLabel);
+      if (!p.agent && dormant === null) continue;
       // Before `syncName` below, and it has to be: that renames an agent to
       // track its terminal title, and an instrument renamed off its own name
       // can never be found again.
       if (isInstrument(names.get(p.pane_id))) continue;
 
       const prev = this.rows.get(p.pane_id);
-      const status = asStatus(p.agent_status);
+      const status = dormant ? 'unknown' : asStatus(p.agent_status);
       const sessionUuid = p.agent_session?.value ?? null;
       // `/clear` keeps the pane and starts a new session on it. The row simply
       // re-resolves, but anything forked off the OLD session is now answering
@@ -526,7 +535,13 @@ export class Board {
         this.namedAs.set(p.pane_id, existing);
       }
       const desired = uniqueName(deriveName(p.terminal_title_stripped), used);
-      const name = existing ?? desired ?? p.agent;
+      // A dormant pane has no agent and so no Herdr name. The name it went by is
+      // in RECENT, matched on the session as well because Herdr recycles pane
+      // ids; failing that, the tab a cockpit start labelled with it.
+      const name = dormant
+        ? uniqueName(this.history.all().find((r) => r.paneId === p.pane_id && r.sessionUuid === dormant)?.name
+            ?? deriveName(tabLabel), used) ?? 'claude'
+        : existing ?? desired ?? p.agent ?? 'claude';
       used.add(name);
 
       // The fork's Herdr status, and only that. Named after this pane, so a
@@ -572,10 +587,14 @@ export class Board {
         shade: null,
         locked: false,
         alias: null,
-        live: true,
+        live: dormant === null,
+        dormant: dormant !== null,
       };
 
       draft.push({ row, paths });
+      // Nothing below applies to a pane with no agent in it: there is no status
+      // to announce, no dialog to answer, and no Herdr name to keep in step.
+      if (dormant) continue;
       if (changed) this.announce(row);
       // Off every resync rather than off the transition, so a dialog already on
       // screen when the cockpit started is answered too — and a second prompt
@@ -689,6 +708,29 @@ export class Board {
     });
   }
 
+}
+
+/**
+ * The session a pane still holds with no agent running in it, or null.
+ *
+ * Herdr restores a saved session by typing `claude --resume <id>` into a fresh
+ * shell, and the pane carries the id from before it types. When that resume
+ * fails the pane is left a bare shell still holding it — measured 2026-10-10:
+ * Claude Code was updating itself and its `claude` shims were gone for ~10s,
+ * exactly when Herdr typed into ten panes, and all ten conversations vanished
+ * from the board, which had dropped every pane with no `agent`. Nothing else
+ * leaves this shape: `/exit` and a killed process both clear `agent_session`,
+ * measured on a live pane, so an agent that ended is never mistaken for one.
+ *
+ * The tab label is what keeps instruments off the board here, since a pane with
+ * no agent has no Herdr name for `isInstrument` to read — and a dormant aside on
+ * the board would claim its parent's whole changelist (invariant 18).
+ */
+export function dormantSession(p: PaneInfo, tabLabel: string | null | undefined): string | null {
+  const session = p.agent_session;
+  if (p.agent || !session || session.kind !== 'id' || session.agent !== 'claude') return null;
+  if (tabLabel === 'aside' || tabLabel === 'usage') return null;
+  return session.value;
 }
 
 /**

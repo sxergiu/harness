@@ -43,7 +43,7 @@ export class History {
   remember(row: AgentRow): void {
     // `aside` goes with `contendedWith`, and for the same reason: a fork's
     // status was a claim about now, and a closed agent cannot be forked again.
-    const dead: AgentRow = { ...row, live: false, contendedWith: [], aside: null };
+    const dead: AgentRow = { ...row, live: false, dormant: false, contendedWith: [], aside: null };
     this.rows = [dead, ...this.rows.filter((r) => r.paneId !== row.paneId)].slice(0, LIMIT);
     this.save();
   }
@@ -113,5 +113,5 @@ export function parse(text: string): AgentRow[] {
       typeof r === 'object' && r !== null
       && typeof (r as AgentRow).paneId === 'string'
       && typeof (r as AgentRow).name === 'string')
-    .map((r) => ({ ...r, model: r.model ?? null, effort: r.effort ?? null, alias: null }));
+    .map((r) => ({ ...r, model: r.model ?? null, effort: r.effort ?? null, alias: null, dormant: false }));
 }

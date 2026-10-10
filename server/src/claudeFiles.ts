@@ -103,7 +103,9 @@ export function installClaudeFiles(
 
 /**
  * Accept Claude Code's workspace trust for a folder, ahead of starting an agent
- * in it. Only ever called with a folder the harness itself owns.
+ * in it: `~/.harness`, which is ours, or a space's directory at the moment the
+ * human starts an agent there — which is the decision the dialog would ask for
+ * a second time, and `mayTrust` keeps that second caller off the home tree.
  *
  * Claude Code asks "Is this a project you created or one you trust?" the first
  * time it starts interactively anywhere untrusted, and the agent sits at that
@@ -136,7 +138,7 @@ export function trustFolder(dir: string): void {
       projects?: Record<string, { hasTrustDialogAccepted?: boolean }>;
     };
     const projects = (config.projects ??= {});
-    const project = (projects[dir] ??= {});
+    const project = (projects[trustKey(dir)] ??= {});
     if (project.hasTrustDialogAccepted === true) return;
     project.hasTrustDialogAccepted = true;
 
@@ -148,6 +150,36 @@ export function trustFolder(dir: string): void {
   } catch {
     // Falls back to the dialog, which is where this started.
   }
+}
+
+/**
+ * The key Claude Code files a folder under. On Windows it is the path with
+ * FORWARD slashes and an upper-case drive — measured, every entry it wrote on
+ * this machine reads `C:/Users/…` — so the native `C:\Users\…` this used to
+ * write was a key nothing reads: an entry of ours sat beside the one the human
+ * made by answering the dialog it was meant to spare them.
+ */
+export function trustKey(dir: string, platform: string = process.platform): string {
+  if (platform !== 'win32') return dir.length > 1 ? dir.replace(/\/+$/, '') : dir;
+  const key = dir.replace(/\\/g, '/').replace(/^([a-z]):/, (_, d: string) => `${d.toUpperCase()}:`);
+  return /^[A-Z]:\/$/.test(key) ? key : key.replace(/\/+$/, '');
+}
+
+/**
+ * Whether a space's directory may be trusted on the human's behalf. Never the
+ * home directory or anything above it, for `trustFolder`'s inheritance reason:
+ * a space pointed at `~` would otherwise trust everything the human owns.
+ */
+export function mayTrust(
+  dir: string, home: string = homedir(), platform: string = process.platform,
+): boolean {
+  const fold = (p: string): string => {
+    const k = trustKey(p, platform);
+    return platform === 'win32' ? k.toLowerCase() : k;
+  };
+  const d = fold(dir);
+  const h = fold(home);
+  return h !== d && !h.startsWith(d.endsWith('/') ? d : `${d}/`);
 }
 
 // ---------------------------------------------------------------------------

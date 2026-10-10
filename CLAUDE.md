@@ -967,6 +967,13 @@ Two things about that panel, both established on a live pane:
   agent, so it is left alone unless the flag is actually missing, goes out via a rename
   because that file holds credentials, and a failure costs the dialog rather than the
   reading. `--dangerously-skip-permissions` does NOT skip this dialog; it was measured too.
+  **A space's directory is trusted too, when the human starts an agent in it** — that
+  press is the decision the dialog would ask for again — but never the home directory or
+  an ancestor of it (`mayTrust`), for the inheritance reason above. **On Windows the key
+  is `C:/Users/…`**, forward slashes and an upper-case drive, which is how every entry
+  Claude Code itself wrote there reads; `trustFolder` used to write the native
+  `C:\Users\…`, a key nothing reads, so the grant silently missed and the dialog came up
+  anyway. `trustKey` is that spelling, and it is pinned in the tests for that reason.
 - **It is kept between readings and closed when the harness exits.** Keeping it is the
   optimisation — ~10s cold against ~1.2s warm — and it stops being one the moment the only
   process that ever talks to this agent has gone, which is when it becomes a tab nobody

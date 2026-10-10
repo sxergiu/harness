@@ -2,7 +2,7 @@ import { mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } 
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { ClaudeFileState } from '@harness/shared';
+import type { ClaudeFileState, PermissionsState } from '@harness/shared';
 
 /**
  * The files `rules.ts` depends on but cannot carry. Rule 4 tells every agent to
@@ -19,8 +19,8 @@ import type { ClaudeFileState } from '@harness/shared';
  *
  * Every file of Claude Code's OWN that this process reads or writes lives here
  * too — the trust grant in `~/.claude.json`, and `~/.claude/settings.json`,
- * which is read for the model in force and written only to put back what a
- * per-agent switch overwrote.
+ * which is read for the model in force and written to put back what a
+ * per-agent switch overwrote and to allow the tools agents use without asking.
  */
 
 /**
@@ -439,25 +439,121 @@ export function settleSettings(): void {
 function writeSetting(key: SettingKey, value: string | null): void {
   try {
     let settings: Record<string, unknown> = {};
-    let mode = 0o600;
     try {
       settings = JSON.parse(readFileSync(SETTINGS, 'utf8')) as Record<string, unknown>;
-      mode = statSync(SETTINGS).mode;
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
-      mkdirSync(dirname(SETTINGS), { recursive: true });
     }
     if (value === null) delete settings[key];
     else settings[key] = value;
-
-    const tmp = `${SETTINGS}.harness-${process.pid}`;
-    writeFileSync(tmp, `${JSON.stringify(settings, null, 2)}\n`, { mode });
-    renameSync(tmp, SETTINGS);
-    settingsAt = -1; // our own write, so the next read must not trust the mtime
+    replaceSettings(settings);
   } catch {
     // The default stays where the switch put it, which is where it stood before
     // any of this existed.
   }
+}
+
+/** Absent is creatable — a pin or the grant below may be the first write. */
+function replaceSettings(settings: Record<string, unknown>): void {
+  let mode = 0o600;
+  try {
+    mode = statSync(SETTINGS).mode;
+  } catch {
+    mkdirSync(dirname(SETTINGS), { recursive: true });
+  }
+  const tmp = `${SETTINGS}.harness-${process.pid}`;
+  writeFileSync(tmp, `${JSON.stringify(settings, null, 2)}\n`, { mode });
+  renameSync(tmp, SETTINGS);
+  settingsAt = -1; // our own write, so the next read must not trust the mtime
+}
+
+/**
+ * What agents are allowed without asking. README promises nothing is gated,
+ * and that is only true once these are in `permissions.allow`: on a machine
+ * that never added them, every agent the cockpit starts stops at every edit
+ * and every command. Windows Claude Code runs shell commands through a
+ * `PowerShell` tool as well as `Bash`, so allowing `Bash` alone there still
+ * asks at most of them.
+ */
+export const GRANTED: readonly string[] = process.platform === 'win32'
+  ? ['Write', 'Edit', 'Bash', 'PowerShell']
+  : ['Write', 'Edit', 'Bash'];
+
+/** `T` and `T(*)` are the two spellings of all of a tool. */
+const wholeTool = (rule: unknown, tool: string): boolean =>
+  rule === tool || rule === `${tool}(*)`;
+
+/**
+ * The merge, pure because a wrong one is silent: dropping or reordering an
+ * entry of the human's own, or another key, loses their configuration with
+ * nothing on screen to say so. Append-only, everything else untouched.
+ *
+ * Null for any shape this would have to guess about. Only a WHOLE-tool deny or
+ * ask counts as overriding: `Bash(rm:*)` is a deliberate narrowing, and
+ * reporting it would read as a fault in the human's own restriction.
+ */
+export function grantOf(
+  settings: unknown, tools: readonly string[] = GRANTED,
+): { missing: string[]; overridden: string[]; next: Record<string, unknown> } | null {
+  if (typeof settings !== 'object' || settings === null || Array.isArray(settings)) return null;
+  const root = settings as Record<string, unknown>;
+  const p = root.permissions ?? {};
+  if (typeof p !== 'object' || p === null || Array.isArray(p)) return null;
+  const perms = p as Record<string, unknown>;
+  const list = (key: string): unknown[] | null => {
+    const v = perms[key] ?? [];
+    return Array.isArray(v) ? v : null;
+  };
+  const allow = list('allow');
+  const deny = list('deny');
+  const ask = list('ask');
+  if (allow === null || deny === null || ask === null) return null;
+
+  const missing = tools.filter((t) => !allow.some((r) => wholeTool(r, t)));
+  const overridden = [...deny, ...ask]
+    .filter((r): r is string => tools.some((t) => wholeTool(r, t)));
+  return {
+    missing,
+    overridden,
+    next: { ...root, permissions: { ...perms, allow: [...allow, ...missing] } },
+  };
+}
+
+export type PermissionsOutcome = 'wrote' | 'granted' | 'unreadable';
+
+/** An absent file is `{}` — nothing allowed yet — never unreadable. */
+function permissionsRead(): ReturnType<typeof grantOf> {
+  const text = read(SETTINGS);
+  try {
+    return grantOf(text === null ? {} : JSON.parse(text));
+  } catch {
+    return null;
+  }
+}
+
+function stateOf(grant: ReturnType<typeof grantOf>): PermissionsState {
+  if (grant === null) return { path: SETTINGS, status: 'unreadable', missing: [], overridden: [] };
+  const { missing, overridden } = grant;
+  return { path: SETTINGS, status: missing.length === 0 ? 'granted' : 'missing', missing, overridden };
+}
+
+export function permissionsState(): PermissionsState {
+  return stateOf(permissionsRead());
+}
+
+/**
+ * Re-read immediately before writing, for `writeSetting`'s reason — every
+ * running agent writes this file. Throws on a failed write: unlike a hold, the
+ * human pressed something and has to hear that it did not happen. `state` is as
+ * it stood BEFORE, so the note can name what was added.
+ */
+export function grantPermissions(): { outcome: PermissionsOutcome; state: PermissionsState } {
+  const grant = permissionsRead();
+  const state = stateOf(grant);
+  if (grant === null) return { outcome: 'unreadable', state };
+  if (grant.missing.length === 0) return { outcome: 'granted', state };
+  replaceSettings(grant.next);
+  return { outcome: 'wrote', state };
 }
 
 /** Null when the assets are not beside the bundle — a `dist/` built before them. */

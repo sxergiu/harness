@@ -36,8 +36,9 @@ It runs on `127.0.0.1` for one person on one machine. It is never deployed.
 Be clear about this, because the tool it replaced claimed more.
 
 **It guarantees nothing about agent behaviour.** Agents are ordinary `claude` CLI processes
-started by Herdr. They load your `~/.claude/settings.json`, which permits `Write`, `Edit`
-and `Bash` without restriction. There is no permission gate, no scope lock, and no sandbox
+started by Herdr. They load your `~/.claude/settings.json`, into which `harness init` adds
+`Write`, `Edit` and `Bash` (and `PowerShell` on Windows) as allowed without asking —
+without that, every agent stops at every edit and command. There is no permission gate, no scope lock, and no sandbox
 here. This is a cockpit, not a cage.
 
 `server/src/rules.ts` is injected into every agent the cockpit starts — never commit, keep
@@ -82,7 +83,7 @@ Herdr must be installed and running — this observes it and does nothing on its
 brew install herdr && brew services start herdr   # or see herdr.dev for Linux and Windows
 
 npm install -g @sxergiu/harness
-harness init   # installs the planner subagent and the two commands
+harness init   # the planner subagent, the two commands, and the tool permissions
 harness
 ```
 
@@ -115,6 +116,12 @@ read back off whichever of the two commands a session was given.
 
 They are ordinary Claude Code files, so a hand-started agent gets them too. `init` writes
 only what is missing and never overwrites one you have changed; `--force` replaces them.
+
+It also adds `Write`, `Edit` and `Bash` — plus `PowerShell` on Windows — to
+`permissions.allow` in `~/.claude/settings.json`, so agents do not ask before every edit
+and command. Only missing entries are appended; nothing of yours is removed or reordered,
+a file it cannot parse is left alone, and a `deny` or `ask` naming a whole tool still wins.
+The same grant is a button under `⚙` → PERMISSIONS.
 
 One process on `http://127.0.0.1:4373`, which it opens for you.
 

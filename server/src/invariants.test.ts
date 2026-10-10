@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { test } from 'node:test';
-import { aliasRuns, sameAccount } from '@harness/shared';
+import { aliasRuns, bashMode, sameAccount } from '@harness/shared';
 import { parse as parseAccounts, rowFor, statusOf } from './account.js';
 import { dormantSession, seedCwd } from './board.js';
 import {
@@ -10,7 +10,7 @@ import {
 } from './claudeFiles.js';
 import { buildAgentDiff, within } from './diff.js';
 import {
-  announces, backoffMs, paneTookText, promptBoxHolds, staleServerWarning, type PaneInfo,
+  announces, backoffMs, paneTookText, promptBoxHolds, shellTail, staleServerWarning, type PaneInfo,
 } from './herdr.js';
 import { parse as parseRecent } from './history.js';
 import { isOurs, merge, versionOf } from './herdrRules.js';
@@ -19,7 +19,8 @@ import { admits, isLocal } from './origin.js';
 import { parse } from './projects.js';
 import { argsFor, DEFAULT_RULES, flatten, modelFrom, resumeArgs, rulesFor } from './rules.js';
 import {
-  aliasDisproven, contextOf, effortDisproven, effortOf, goalOf, modelOf, slugForCwd, windowFor, type Entry,
+  aliasDisproven, contextOf, effortDisproven, effortOf, feedTurns, goalOf, modelOf, slugForCwd,
+  windowFor, type Entry,
 } from './transcript.js';
 import { cropPanel, limitsOf } from './usage.js';
 
@@ -103,6 +104,43 @@ test('a stalled `! cmd` is detected — bash mode draws the box with no `❯`', 
 test('an echoed `!` run above an empty box is history, not the box', () => {
   const pane = ['!  echo x', '  ⎿  x', '─────', '❯ ', '─────'].join('\n');
   assert.equal(promptBoxHolds(pane), false);
+});
+
+// -- a bash-mode run while it runs -----------------------------------------
+// The transcript records a run only once it is over, so the box that started
+// it reads the pane meanwhile. A wrong cut shows another run's output, or the
+// agent's reply, as this one's.
+
+const running = [
+  '!  echo old',
+  '  ⎿  old',
+  '● earlier reply',
+  '!  for i in 1 2 3; do echo line$i; sleep 1; done',
+  // The separator is a space then an NBSP — measured, and a plain-space cut
+  // left the NBSP on the first line.
+  '  ⎿  line1',
+  '     line2',
+  '       indented',
+  '     (2s)',
+  '     (ctrl+b to run in background)',
+  '─────',
+  '❯ ',
+].join('\n');
+
+test('the tail is the LAST matching echo, cut at the box, without timers', () => {
+  assert.deepEqual(shellTail(running, 'for i in 1 2 3; do echo line$i; sleep 1; done'), [
+    'line1', 'line2', '  indented',
+  ]);
+});
+
+test('an older run of a different command is not this one', () => {
+  assert.deepEqual(shellTail(running, 'echo old'), ['old']);
+  assert.equal(shellTail(running, 'echo never-ran'), null);
+});
+
+test('a multi-line command\'s echo is skipped, and Running… is not output', () => {
+  const pane = ['!  echo first', '  echo second', '  ⎿  Running…', '─────'].join('\n');
+  assert.deepEqual(shellTail(pane, 'echo first'), []);
 });
 
 // -- the answer nobody gave ------------------------------------------------
@@ -306,6 +344,57 @@ test('malformed goal attachments return null rather than throwing', () => {
     assert.doesNotThrow(() => goalOf([e]));
     assert.equal(goalOf([e]), null);
   }
+});
+
+// -- bash-mode runs in the feed --------------------------------------------
+// Two `user` entries per run, measured. Read as ordinary messages, one run
+// showed as two turns of raw XML.
+
+const user = (content: string): Entry => ({ type: 'user', message: { content } }) as unknown as Entry;
+const reply = (text: string): Entry =>
+  ({ type: 'assistant', message: { content: [{ type: 'text', text }] } }) as unknown as Entry;
+
+test('one run is ONE turn holding one shell entry, with the reply under it', () => {
+  const turns = feedTurns([
+    user('<bash-input> echo hi</bash-input>'),
+    user('<bash-stdout>hi</bash-stdout><bash-stderr></bash-stderr>'),
+    reply('it printed hi'),
+  ], '/repo');
+  assert.equal(turns.length, 1);
+  assert.deepEqual(turns[0].entries[0], {
+    kind: 'shell', command: 'echo hi', output: { stdout: 'hi', stderr: '' },
+  });
+  assert.equal(turns[0].entries[1].kind, 'text');
+});
+
+test('a queued run (no leading space), a multi-line one and stderr all read', () => {
+  const [queued, multi] = feedTurns([
+    user('<bash-input>echo q</bash-input>'),
+    user('<bash-stdout>q\r\n</bash-stdout><bash-stderr></bash-stderr>'),
+    user('<bash-input> echo a\necho b</bash-input>'),
+    user('<bash-stdout></bash-stdout><bash-stderr>ls: nope\n</bash-stderr>'),
+  ], '/repo');
+  assert.deepEqual(queued.entries[0], { kind: 'shell', command: 'echo q', output: { stdout: 'q', stderr: '' } });
+  assert.deepEqual(multi.entries[0], {
+    kind: 'shell', command: 'echo a\necho b', output: { stdout: '', stderr: 'ls: nope' },
+  });
+});
+
+test('a run with no output yet, and output with no run, never open a turn of XML', () => {
+  const pending = feedTurns([user('<bash-input> sleep 9</bash-input>')], '/repo');
+  assert.deepEqual(pending[0].entries[0], { kind: 'shell', command: 'sleep 9', output: null });
+  const orphan = feedTurns([user('<bash-stdout>stray</bash-stdout><bash-stderr></bash-stderr>')], '/repo');
+  assert.deepEqual(orphan[0].entries, [{ kind: 'system', text: 'stray' }]);
+});
+
+test('a block runs as itself, a PowerShell one inside bash quotes, anything else not at all', () => {
+  assert.equal(bashMode('  npm test \n', 'bash'), 'npm test');
+  // Bash reads `'a''b'` as `ab`: a doubled quote would vanish before PowerShell.
+  assert.equal(bashMode(`Write-Output 'it'`, 'powershell'), `powershell -NoProfile -Command 'Write-Output '\\''it'\\'''`);
+  assert.equal(bashMode('$ npm test\nok', 'console'), null);
+  assert.equal(bashMode('const x = 1', 'ts'), null);
+  assert.equal(bashMode('   ', 'sh'), null);
+  assert.equal(bashMode('ls', null), null);
 });
 
 // -- the transcript slug ---------------------------------------------------

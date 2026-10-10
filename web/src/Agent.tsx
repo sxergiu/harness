@@ -602,6 +602,21 @@ export function AgentView(
           </span>
         </div>
       )}
+      {agent.dormant && (
+        <div className="flex items-baseline gap-2 border-b border-neutral-800 px-3 py-1.5">
+          <span className="min-w-0 flex-1 text-neutral-400">
+            not running — Herdr could not resume this conversation when it restored the pane
+          </span>
+          <button
+            disabled={busy}
+            onClick={() => void call(`/api/agents/${agent.paneId}/resume`)}
+            className="shrink-0 rounded bg-neutral-800 px-2 py-0.5 text-neutral-200 hover:bg-neutral-700 disabled:opacity-40"
+            title="Starts claude --resume in the same pane, with the rules and model a cockpit start passes. Takes a few seconds."
+          >
+            resume
+          </button>
+        </div>
+      )}
 
       {/*
         Top-aligned, unlike the prompt bar's `items-end`: this box grows DOWN

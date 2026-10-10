@@ -7,7 +7,7 @@ is that there is one place to change them.
 
 | Version | |
 |---|---|
-| [0.4.0](releases/0.4.0.md) | Windows: agents started without most of their rules, reaching Herdr's named pipe, the claude.cmd shim; a log that says why the cockpit stopped; the header says what an agent is running; holding the machine default model |
+| [0.4.0](releases/0.4.0.md) | Agents allowed their tools by `harness init`; Windows: agents started without most of their rules, reaching Herdr's named pipe, the claude.cmd shim; conversations a failed restore dropped, with resume; no trust dialog when starting from a space; a log that says why the cockpit stopped; the header says what an agent is running; holding the machine default model; ▶ run on code blocks |
 | [0.3.0](releases/0.3.0.md) | A space that pinned itself to the wrong checkout; a per-agent model switch, contained; answering the Claude in Chrome dialog; per-account limits |
 | [0.2.2](releases/0.2.2.md) | Test-only — the fixture that was testing the separator instead of the hole, and the three-platform claim true again |
 | [0.2.1](releases/0.2.1.md) | An answer nobody gave; the log an outage was erasing; one alert per event; opening a file the agent named |

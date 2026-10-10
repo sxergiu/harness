@@ -325,7 +325,12 @@ Every one was established by probing the live system, and most fail *silently* i
 **Nothing.** Say so plainly; do not soften it.
 
 Agents run as real `claude` CLI processes started by Herdr, loading the user's own
-`~/.claude/settings.json`, which permits `Write(*)`, `Edit(*)`, `Bash(*)`. `server/src/rules.ts`
+`~/.claude/settings.json`, into which `harness init` (or ⚙ PERMISSIONS) appends `Write`,
+`Edit`, `Bash` — and `PowerShell` on Windows, whose shell tool it is — to
+`permissions.allow` (`grantOf` in `claudeFiles.ts`). Nothing used to install that: the file
+was simply assumed to permit them, and on a machine where it did not every agent stopped at
+every tool call. Append-only, refused on a file it cannot parse, and a whole-tool `deny` or
+`ask` still wins and is reported rather than removed. `server/src/rules.ts`
 is injected via `--append-system-prompt`, and that is the entire surface. The `planner`
 those rules name is a user-level agent file (`~/.claude/agents/planner.md`) the CLI loads
 on its own, so a hand-started agent has it too — and a deleted file leaves rule 4 naming
@@ -383,8 +388,9 @@ server/src/
                       subagent and the two commands, `harness init`, the trust
                       grant for the one folder that is ours, and settings.json —
                       read for the model in force, written to put back what a
-                      per-agent switch overwrote and to hold the machine default
-                      wherever `~/.harness/claude-model` pins it
+                      per-agent switch overwrote, to hold the machine default
+                      wherever `~/.harness/claude-model` pins it, and to allow
+                      the agents' tools
   herdrRules.ts       merges our one detection rule into Herdr's current manifest
   chrome.ts           answering that dialog with "allow" when the human has said
                       it may. The only key this cockpit presses on its own
@@ -1010,7 +1016,7 @@ npm test            # node:test over fixtures — no Herdr, no network, no ~/.cl
 npm run dev         # server on 4373, Vite on 4374 — open 4374 (4373 says so too)
 npm run build       # vite → dist/web, esbuild → dist/server.js
 npm start           # the real thing: one process, one port, opens itself
-harness init        # the Claude files and the Herdr rule; never clobbers
+harness init        # the Claude files, the Herdr rule, the tool grant; never clobbers
 harness stop        # NOT pkill; probes the lockfile's port before killing anything
 ```
 

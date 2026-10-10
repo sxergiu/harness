@@ -271,6 +271,12 @@ export type FeedEntry =
   | { kind: 'user'; text: string }
   /** A slash command the human ran — /clear, /goal, /exit and the rest. */
   | { kind: 'command'; name: string; args: string }
+  /**
+   * A bash-mode run (`! cmd`), typed at the terminal or sent by a box's ▶ run.
+   * `output` is null until its stdout entry lands. Claude Code records no exit
+   * code, so there is no outcome to show beyond what was printed.
+   */
+  | { kind: 'shell'; command: string; output: { stdout: string; stderr: string } | null }
   /** Claude Code's own plumbing (command output, goal checks), not a human turn. */
   | { kind: 'system'; text: string }
   | { kind: 'text'; text: string }
@@ -319,6 +325,40 @@ export interface FeedTurn {
 export interface FeedPage {
   turn: FeedTurn | null;
   totalTurns: number;
+}
+
+const BASH_LANGUAGES = new Set(['bash', 'sh', 'shell', 'zsh']);
+const POWERSHELL_LANGUAGES = new Set(['powershell', 'ps1', 'pwsh']);
+
+/**
+ * What a fenced block's ▶ run types after `! `, or null when the block is not
+ * one to run. Shared because the browser has to recognise the run it started
+ * among the recorded ones, and `<bash-input>` records exactly this string.
+ *
+ * `!` runs Git Bash on Windows (measured: `/usr/bin/bash`), so a PowerShell
+ * block is handed to `powershell -Command` inside BASH's single quotes — a `'`
+ * is `'\''`, never doubled: bash reads `'a''b'` as `ab` and the quote is gone
+ * before PowerShell sees it. Measured live: `'` and `"` both survive this, and
+ * so does a multi-line body. `powershell` rather than `pwsh` even for a `pwsh`
+ * block, because 5.1 is the one Windows always has; off Windows neither is
+ * usually there and such a run fails with command-not-found in its output.
+ *
+ * `console` is deliberately absent. It is how a SESSION is written — a `$`
+ * prompt and the output under it — and running one would execute the output.
+ */
+export const bashMode = (code: string, language: string | null): string | null => {
+  const body = code.trim();
+  if (!body || !language) return null;
+  if (BASH_LANGUAGES.has(language)) return body;
+  if (POWERSHELL_LANGUAGES.has(language)) {
+    return `powershell -NoProfile -Command '${body.replace(/'/g, `'\\''`)}'`;
+  }
+  return null;
+};
+
+/** The live tail of a run, read off the pane. Null: its echo is not on screen. */
+export interface ShellTail {
+  lines: string[] | null;
 }
 
 // ---------------------------------------------------------------------------

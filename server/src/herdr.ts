@@ -139,6 +139,50 @@ export function promptBoxHolds(pane: string): boolean {
 }
 
 /**
+ * The output a bash-mode run is printing right now, read off the pane — the
+ * only place it exists before it finishes, since the transcript records a run
+ * whole once it is over. Display only: nothing is decided on it.
+ *
+ * Measured shape: the command echoed at column 0 as `!  <cmd>` (continuation
+ * lines of a multi-line command indented under it), then `  ⎿  line1`,
+ * `     line2`, and while it runs a `(3s)` timer and a `(ctrl+b to run in
+ * background)` hint. The LAST echo matching `head` is the run; matching by a
+ * prefix of the first line, because the pane wraps a long one.
+ *
+ * Null when no echo matches — which is also what a run queued behind a working
+ * agent looks like, since it is not echoed until it starts.
+ */
+export function shellTail(pane: string, head: string): string[] | null {
+  const want = head.trim().slice(0, 40);
+  if (!want) return null;
+  const lines = pane.split('\n');
+  let at = -1;
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const echo = /^!\s+(.*)$/.exec(lines[i]);
+    if (echo && echo[1].trim().startsWith(want)) { at = i; break; }
+  }
+  if (at < 0) return null;
+
+  const out: string[] = [];
+  let started = false;
+  for (const line of lines.slice(at + 1)) {
+    // Anything at column 0 is past the run: the agent's reply, a rule, the box.
+    if (line && !line.startsWith(' ')) break;
+    if (!started) {
+      // Lines before the `⎿` are the rest of a multi-line command's echo.
+      if (!/^\s*⎿/.test(line)) continue;
+      started = true;
+    }
+    // The separator after `⎿` is a space and an NBSP, measured; `\s` takes both.
+    const text = /^\s*⎿/.test(line) ? line.replace(/^\s*⎿\s{0,2}/, '') : line.replace(/^ {5}/, '');
+    if (/^(Running…|\(\d+s\)|\(ctrl\+b to run in background\))$/.test(text.trim())) continue;
+    out.push(text.trimEnd());
+  }
+  while (out.length && !out[out.length - 1]) out.pop();
+  return out;
+}
+
+/**
  * Whether typed text reached the pane at all — the question `sendText` presses
  * Enter on, and the reason that Enter is conditional.
  *

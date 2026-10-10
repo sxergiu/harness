@@ -455,6 +455,15 @@ const GOAL_CLEAR = /^(clear|stop|off|reset|none|cancel)$/i;
 const STDOUT_RE = /^<local-command-stdout>([\s\S]*)<\/local-command-stdout>$/;
 
 /**
+ * A bash-mode run (`! cmd`) is two `user` entries: the command, then what it
+ * printed. Typed as `! cmd` the command keeps a leading space; queued while the
+ * agent worked it has none — both measured, hence the trim at the use site.
+ */
+const BASH_INPUT_RE = /^<bash-input>([\s\S]*)<\/bash-input>$/;
+const BASH_STDOUT_RE = /<bash-stdout>([\s\S]*?)<\/bash-stdout>/;
+const BASH_STDERR_RE = /<bash-stderr>([\s\S]*?)<\/bash-stderr>/;
+
+/**
  * An entry's text, wherever it lives. `user` entries keep it under
  * `message.content`; `system` entries — how /usage and other local commands are
  * recorded — put it at the top level instead. Reading only one of the two makes
@@ -465,6 +474,11 @@ function entryText(e: Entry): string {
   const c = e.message?.content;
   if (typeof c === 'string') return c;
   return blocks(e).filter((b) => b.type === 'text').map((b) => b.text ?? '').join('\n');
+}
+
+/** A bash-mode stream as printed. PowerShell writes `\r\n`, measured. */
+function clean(text: string | undefined): string {
+  return (text ?? '').replace(/\r\n/g, '\n').trimEnd();
 }
 
 /** Unwraps `<local-command-stdout>…</local-command-stdout>` when present. */
@@ -642,6 +656,8 @@ export function feedTurns(
   const agentMeta = subagentMeta(entries);
   const turns: FeedTurn[] = [];
   let current: FeedTurn | null = null;
+  /** The bash-mode run still waiting for its output entry. */
+  let running: Extract<FeedEntry, { kind: 'shell' }> | null = null;
   const open = (startedAt: string | null): FeedTurn => {
     const t: FeedTurn = { index: turns.length, startedAt, entries: [] };
     turns.push(t);
@@ -678,6 +694,28 @@ export function feedTurns(
       }
       const text = userText(e);
       if (text === null) continue;
+
+      // A bash-mode run is something the human did, so its command opens a
+      // turn and its output joins it — rendered raw, one run read as two turns
+      // of XML. Settled before the meta check, which neither entry needs.
+      const input = BASH_INPUT_RE.exec(text.trim());
+      if (input) {
+        running = { kind: 'shell', command: input[1].trim(), output: null };
+        open(e.timestamp ?? null).entries.push(running);
+        continue;
+      }
+      if (text.trimStart().startsWith('<bash-stdout>')) {
+        const stdout = clean(BASH_STDOUT_RE.exec(text)?.[1]);
+        const stderr = clean(BASH_STDERR_RE.exec(text)?.[1]);
+        if (running) {
+          running.output = { stdout, stderr };
+          running = null;
+        } else {
+          const body = [stdout, stderr].filter(Boolean).join('\n');
+          if (body) (current ?? open(e.timestamp ?? null)).entries.push({ kind: 'system', text: body });
+        }
+        continue;
+      }
 
       // Claude Code writes its own plumbing as `user` entries too — the /clear
       // caveat, goal Stop-hook notices, command stdout. Rendering those as

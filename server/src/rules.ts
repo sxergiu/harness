@@ -263,11 +263,6 @@ under it is a collision it will never see coming.
 Do not carry on the work above. It is not yours. You are here to explain it.`;
 
 /**
- * Forks the parent's session into a new one. `--fork-session` is what makes
- * this safe to run against a LIVE agent: verified on pane w2:pG, the parent's
- * transcript was byte-identical afterwards, so the main feed does not move.
- */
-/**
  * A dormant pane's conversation, resumed with the rules and model a cockpit
  * start passes. Herdr's own restore types a bare `claude --resume <id>`, so even
  * a restore that WORKS leaves every agent it brings back without either.
@@ -276,6 +271,11 @@ export function resumeArgs(sessionUuid: string, start: string[]): string[] {
   return ['--resume', sessionUuid, ...start];
 }
 
+/**
+ * Forks the parent's session into a new one. `--fork-session` is what makes
+ * this safe to run against a LIVE agent: verified on pane w2:pG, the parent's
+ * transcript was byte-identical afterwards, so the main feed does not move.
+ */
 export function asideArgs(sessionUuid: string): string[] {
   return [
     '--resume', sessionUuid,

@@ -92,6 +92,17 @@ test('a slash-command menu below the box does not hide the box', () => {
   assert.equal(promptBoxHolds(pane), true);
 });
 
+test('a stalled `! cmd` is detected — bash mode draws the box with no `❯`', () => {
+  // Measured: the box redraws as `!` + NBSP at column 0, with a hint below it.
+  const pane = ['❯ earlier prompt', 'reply', '─────', '!  echo x', '─────', '  ! for shell mode'].join('\n');
+  assert.equal(promptBoxHolds(pane), true);
+});
+
+test('an echoed `!` run above an empty box is history, not the box', () => {
+  const pane = ['!  echo x', '  ⎿  x', '─────', '❯ ', '─────'].join('\n');
+  assert.equal(promptBoxHolds(pane), false);
+});
+
 // -- the answer nobody gave ------------------------------------------------
 // `sendText` used to send its Enter in the same call as the text. At a
 // selection dialog the text is swallowed and that Enter commits the highlighted

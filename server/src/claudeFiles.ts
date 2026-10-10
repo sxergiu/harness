@@ -2,7 +2,7 @@ import { mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } 
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { ClaudeFileState } from '@harness/shared';
+import type { ClaudeFileState, PermissionsState } from '@harness/shared';
 
 /**
  * The files `rules.ts` depends on but cannot carry. Rule 4 tells every agent to
@@ -19,8 +19,8 @@ import type { ClaudeFileState } from '@harness/shared';
  *
  * Every file of Claude Code's OWN that this process reads or writes lives here
  * too — the trust grant in `~/.claude.json`, and `~/.claude/settings.json`,
- * which is read for the model in force and written only to put back what a
- * per-agent switch overwrote.
+ * which is read for the model in force and written to put back what a
+ * per-agent switch overwrote and to allow the tools agents use without asking.
  */
 
 /**
@@ -103,7 +103,9 @@ export function installClaudeFiles(
 
 /**
  * Accept Claude Code's workspace trust for a folder, ahead of starting an agent
- * in it. Only ever called with a folder the harness itself owns.
+ * in it: `~/.harness`, which is ours, or a space's directory at the moment the
+ * human starts an agent there — which is the decision the dialog would ask for
+ * a second time, and `mayTrust` keeps that second caller off the home tree.
  *
  * Claude Code asks "Is this a project you created or one you trust?" the first
  * time it starts interactively anywhere untrusted, and the agent sits at that
@@ -136,7 +138,7 @@ export function trustFolder(dir: string): void {
       projects?: Record<string, { hasTrustDialogAccepted?: boolean }>;
     };
     const projects = (config.projects ??= {});
-    const project = (projects[dir] ??= {});
+    const project = (projects[trustKey(dir)] ??= {});
     if (project.hasTrustDialogAccepted === true) return;
     project.hasTrustDialogAccepted = true;
 
@@ -148,6 +150,36 @@ export function trustFolder(dir: string): void {
   } catch {
     // Falls back to the dialog, which is where this started.
   }
+}
+
+/**
+ * The key Claude Code files a folder under. On Windows it is the path with
+ * FORWARD slashes and an upper-case drive — measured, every entry it wrote on
+ * this machine reads `C:/Users/…` — so the native `C:\Users\…` this used to
+ * write was a key nothing reads: an entry of ours sat beside the one the human
+ * made by answering the dialog it was meant to spare them.
+ */
+export function trustKey(dir: string, platform: string = process.platform): string {
+  if (platform !== 'win32') return dir.length > 1 ? dir.replace(/\/+$/, '') : dir;
+  const key = dir.replace(/\\/g, '/').replace(/^([a-z]):/, (_, d: string) => `${d.toUpperCase()}:`);
+  return /^[A-Z]:\/$/.test(key) ? key : key.replace(/\/+$/, '');
+}
+
+/**
+ * Whether a space's directory may be trusted on the human's behalf. Never the
+ * home directory or anything above it, for `trustFolder`'s inheritance reason:
+ * a space pointed at `~` would otherwise trust everything the human owns.
+ */
+export function mayTrust(
+  dir: string, home: string = homedir(), platform: string = process.platform,
+): boolean {
+  const fold = (p: string): string => {
+    const k = trustKey(p, platform);
+    return platform === 'win32' ? k.toLowerCase() : k;
+  };
+  const d = fold(dir);
+  const h = fold(home);
+  return h !== d && !h.startsWith(d.endsWith('/') ? d : `${d}/`);
 }
 
 // ---------------------------------------------------------------------------
@@ -407,25 +439,121 @@ export function settleSettings(): void {
 function writeSetting(key: SettingKey, value: string | null): void {
   try {
     let settings: Record<string, unknown> = {};
-    let mode = 0o600;
     try {
       settings = JSON.parse(readFileSync(SETTINGS, 'utf8')) as Record<string, unknown>;
-      mode = statSync(SETTINGS).mode;
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
-      mkdirSync(dirname(SETTINGS), { recursive: true });
     }
     if (value === null) delete settings[key];
     else settings[key] = value;
-
-    const tmp = `${SETTINGS}.harness-${process.pid}`;
-    writeFileSync(tmp, `${JSON.stringify(settings, null, 2)}\n`, { mode });
-    renameSync(tmp, SETTINGS);
-    settingsAt = -1; // our own write, so the next read must not trust the mtime
+    replaceSettings(settings);
   } catch {
     // The default stays where the switch put it, which is where it stood before
     // any of this existed.
   }
+}
+
+/** Absent is creatable — a pin or the grant below may be the first write. */
+function replaceSettings(settings: Record<string, unknown>): void {
+  let mode = 0o600;
+  try {
+    mode = statSync(SETTINGS).mode;
+  } catch {
+    mkdirSync(dirname(SETTINGS), { recursive: true });
+  }
+  const tmp = `${SETTINGS}.harness-${process.pid}`;
+  writeFileSync(tmp, `${JSON.stringify(settings, null, 2)}\n`, { mode });
+  renameSync(tmp, SETTINGS);
+  settingsAt = -1; // our own write, so the next read must not trust the mtime
+}
+
+/**
+ * What agents are allowed without asking. README promises nothing is gated,
+ * and that is only true once these are in `permissions.allow`: on a machine
+ * that never added them, every agent the cockpit starts stops at every edit
+ * and every command. Windows Claude Code runs shell commands through a
+ * `PowerShell` tool as well as `Bash`, so allowing `Bash` alone there still
+ * asks at most of them.
+ */
+export const GRANTED: readonly string[] = process.platform === 'win32'
+  ? ['Write', 'Edit', 'Bash', 'PowerShell']
+  : ['Write', 'Edit', 'Bash'];
+
+/** `T` and `T(*)` are the two spellings of all of a tool. */
+const wholeTool = (rule: unknown, tool: string): boolean =>
+  rule === tool || rule === `${tool}(*)`;
+
+/**
+ * The merge, pure because a wrong one is silent: dropping or reordering an
+ * entry of the human's own, or another key, loses their configuration with
+ * nothing on screen to say so. Append-only, everything else untouched.
+ *
+ * Null for any shape this would have to guess about. Only a WHOLE-tool deny or
+ * ask counts as overriding: `Bash(rm:*)` is a deliberate narrowing, and
+ * reporting it would read as a fault in the human's own restriction.
+ */
+export function grantOf(
+  settings: unknown, tools: readonly string[] = GRANTED,
+): { missing: string[]; overridden: string[]; next: Record<string, unknown> } | null {
+  if (typeof settings !== 'object' || settings === null || Array.isArray(settings)) return null;
+  const root = settings as Record<string, unknown>;
+  const p = root.permissions ?? {};
+  if (typeof p !== 'object' || p === null || Array.isArray(p)) return null;
+  const perms = p as Record<string, unknown>;
+  const list = (key: string): unknown[] | null => {
+    const v = perms[key] ?? [];
+    return Array.isArray(v) ? v : null;
+  };
+  const allow = list('allow');
+  const deny = list('deny');
+  const ask = list('ask');
+  if (allow === null || deny === null || ask === null) return null;
+
+  const missing = tools.filter((t) => !allow.some((r) => wholeTool(r, t)));
+  const overridden = [...deny, ...ask]
+    .filter((r): r is string => tools.some((t) => wholeTool(r, t)));
+  return {
+    missing,
+    overridden,
+    next: { ...root, permissions: { ...perms, allow: [...allow, ...missing] } },
+  };
+}
+
+export type PermissionsOutcome = 'wrote' | 'granted' | 'unreadable';
+
+/** An absent file is `{}` — nothing allowed yet — never unreadable. */
+function permissionsRead(): ReturnType<typeof grantOf> {
+  const text = read(SETTINGS);
+  try {
+    return grantOf(text === null ? {} : JSON.parse(text));
+  } catch {
+    return null;
+  }
+}
+
+function stateOf(grant: ReturnType<typeof grantOf>): PermissionsState {
+  if (grant === null) return { path: SETTINGS, status: 'unreadable', missing: [], overridden: [] };
+  const { missing, overridden } = grant;
+  return { path: SETTINGS, status: missing.length === 0 ? 'granted' : 'missing', missing, overridden };
+}
+
+export function permissionsState(): PermissionsState {
+  return stateOf(permissionsRead());
+}
+
+/**
+ * Re-read immediately before writing, for `writeSetting`'s reason — every
+ * running agent writes this file. Throws on a failed write: unlike a hold, the
+ * human pressed something and has to hear that it did not happen. `state` is as
+ * it stood BEFORE, so the note can name what was added.
+ */
+export function grantPermissions(): { outcome: PermissionsOutcome; state: PermissionsState } {
+  const grant = permissionsRead();
+  const state = stateOf(grant);
+  if (grant === null) return { outcome: 'unreadable', state };
+  if (grant.missing.length === 0) return { outcome: 'granted', state };
+  replaceSettings(grant.next);
+  return { outcome: 'wrote', state };
 }
 
 /** Null when the assets are not beside the bundle — a `dist/` built before them. */

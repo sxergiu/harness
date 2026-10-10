@@ -5,7 +5,9 @@ import { test } from 'node:test';
 import { aliasRuns, sameAccount } from '@harness/shared';
 import { parse as parseAccounts, rowFor, statusOf } from './account.js';
 import { dormantSession, seedCwd } from './board.js';
-import { HOLD_MS, decide, holdFor, pinAction, settleAction } from './claudeFiles.js';
+import {
+  HOLD_MS, decide, grantOf, holdFor, mayTrust, pinAction, settleAction, trustKey,
+} from './claudeFiles.js';
 import { buildAgentDiff, within } from './diff.js';
 import {
   announces, backoffMs, paneTookText, promptBoxHolds, staleServerWarning, type PaneInfo,
@@ -90,6 +92,17 @@ test('only the LAST prompt line counts — earlier ones are scrollback echoes', 
 test('a slash-command menu below the box does not hide the box', () => {
   const pane = ['❯ /exit', '  /clear    Clear conversation', '  /exit     Exit', '  /help'].join('\n');
   assert.equal(promptBoxHolds(pane), true);
+});
+
+test('a stalled `! cmd` is detected — bash mode draws the box with no `❯`', () => {
+  // Measured: the box redraws as `!` + NBSP at column 0, with a hint below it.
+  const pane = ['❯ earlier prompt', 'reply', '─────', '!  echo x', '─────', '  ! for shell mode'].join('\n');
+  assert.equal(promptBoxHolds(pane), true);
+});
+
+test('an echoed `!` run above an empty box is history, not the box', () => {
+  const pane = ['!  echo x', '  ⎿  x', '─────', '❯ ', '─────'].join('\n');
+  assert.equal(promptBoxHolds(pane), false);
 });
 
 // -- the answer nobody gave ------------------------------------------------
@@ -433,6 +446,51 @@ test('a pin asserts only on drift, and an unpinned default is left alone', () =>
   // loop over Claude Code's own settings — invisible until it clobbered
   // something a concurrent write had just put there.
   assert.equal(pinAction('opus[1m]', 'opus[1m]'), 'leave');
+});
+
+test('trust is keyed the way Claude Code keys it, and never reaches the home tree', () => {
+  // A key in any other spelling is one Claude Code never reads, so the dialog
+  // comes up anyway with nothing saying the grant missed.
+  assert.equal(trustKey('c:\\Users\\me\\repo\\', 'win32'), 'C:/Users/me/repo');
+  assert.equal(trustKey('C:\\', 'win32'), 'C:/');
+  assert.equal(trustKey('/Users/me/repo/', 'darwin'), '/Users/me/repo');
+  assert.equal(trustKey('/', 'darwin'), '/');
+
+  assert.equal(mayTrust('C:\\Users\\me\\repos\\x', 'C:\\Users\\me', 'win32'), true);
+  // Trust is inherited, so home or any ancestor of it would trust everything.
+  assert.equal(mayTrust('c:/users/ME', 'C:\\Users\\me', 'win32'), false);
+  assert.equal(mayTrust('C:\\', 'C:\\Users\\me', 'win32'), false);
+  assert.equal(mayTrust('/Users', '/Users/me', 'darwin'), false);
+  assert.equal(mayTrust('/', '/Users/me', 'darwin'), false);
+  assert.equal(mayTrust('/Users/me2', '/Users/me', 'darwin'), true);
+});
+
+test('the tool grant only appends, and keeps everything of the human\'s own', () => {
+  const tools = ['Write', 'Edit', 'Bash'];
+  const mine = {
+    theme: 'dark',
+    permissions: { allow: ['Read(src/**)', 'Bash(*)'], deny: ['Bash(rm:*)'], defaultMode: 'default' },
+  };
+  const grant = grantOf(mine, tools)!;
+  // `Bash(*)` is all of Bash already, and a narrowed deny is a deliberate
+  // restriction rather than something overriding the grant.
+  assert.deepEqual(grant.missing, ['Write', 'Edit']);
+  assert.deepEqual(grant.overridden, []);
+  assert.deepEqual(grant.next, {
+    theme: 'dark',
+    permissions: {
+      allow: ['Read(src/**)', 'Bash(*)', 'Write', 'Edit'],
+      deny: ['Bash(rm:*)'],
+      defaultMode: 'default',
+    },
+  });
+  assert.deepEqual(grantOf(grant.next, tools)!.missing, []);
+
+  assert.deepEqual(grantOf({ permissions: { ask: ['Edit'] } }, tools)!.overridden, ['Edit']);
+  assert.deepEqual(grantOf({}, tools)!.next, { permissions: { allow: tools } });
+  // A shape we would have to guess about is never written over.
+  assert.equal(grantOf({ permissions: { allow: 'Bash' } }, tools), null);
+  assert.equal(grantOf([], tools), null);
 });
 
 test('the model is read past a subagent, whose requests are its own', () => {

@@ -121,10 +121,21 @@ const SUBMIT_CHECK_MS = 500;
  * Enter then submits their text along with ours. That is what Claude Code would
  * do with their next Enter anyway — our text was appended to theirs the moment
  * it was typed — and leaving it unsent is the bug this exists to end.
+ *
+ * IN BASH MODE THE BOX HAS NO `❯`. A prompt starting `!` redraws the box as
+ * `!` at column 0 — measured: `!`, an NBSP, then ` echo x`, between the rules —
+ * so a stalled `! cmd` offers no `❯` line of its own and would be judged by an
+ * older echo, or by none at all. A column-0 `!` therefore counts as the box
+ * too, and the column is what excludes the `  ! for shell mode` hint bash mode
+ * draws BELOW the box.
+ * Echoes of earlier runs (`!  cmd`) sit above the box like `❯` echoes do, so
+ * the last line still wins.
  */
 export function promptBoxHolds(pane: string): boolean {
-  const box = pane.split('\n').filter((line) => line.trimStart().startsWith('❯')).pop();
-  return box !== undefined && box.replace(/^\s*❯/, '').trim().length > 0;
+  const box = pane.split('\n')
+    .filter((line) => line.trimStart().startsWith('❯') || line.startsWith('!'))
+    .pop();
+  return box !== undefined && box.replace(/^\s*[❯!]/, '').trim().length > 0;
 }
 
 /**

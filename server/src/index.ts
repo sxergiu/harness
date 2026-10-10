@@ -9,16 +9,17 @@ import { WebSocketServer, type WebSocket } from 'ws';
 import {
   AGENT_SHADES, BIND_HOST, DEFAULT_PORT, DEV_PAGE_PORT, EFFORTS, MODELS, WS_PATH,
   type AccountView, type AgentDiff, type AgentShade, type AsideView, type BlockedView,
-  type FeedEntry, type FeedPage, type FileContent, type HerdrRuleState, type ServerEvent,
-  type SettingsView, type SubagentsView, type UsageView,
+  type FeedEntry, type FeedPage, type FileContent, type HerdrRuleState, type PermissionsState,
+  type ServerEvent, type SettingsView, type SubagentsView, type UsageView,
 } from '@harness/shared';
 import { Account } from './account.js';
 import { Aside } from './aside.js';
 import { Board } from './board.js';
 import { autoAcceptEnabled, setAutoAccept } from './chrome.js';
 import {
-  claudeFiles, configuredAlias, configuredEffort, hold, installClaudeFiles, pinnedAlias,
-  setPinnedAlias, settleSettings,
+  claudeFiles, configuredAlias, configuredEffort, grantPermissions, hold, installClaudeFiles,
+  mayTrust, permissionsState, pinnedAlias, setPinnedAlias, settleSettings, trustFolder,
+  type PermissionsOutcome,
 } from './claudeFiles.js';
 import { buildAgentDiff, readAgentFile, touchedPaths } from './diff.js';
 import { Herdr } from './herdr.js';
@@ -78,8 +79,9 @@ if (command === 'init') {
 }
 
 /**
- * Puts the files the agents are told about where Claude Code reads them, and
- * merges our one detection rule into Herdr's manifest.
+ * Puts the files the agents are told about where Claude Code reads them,
+ * merges our one detection rule into Herdr's manifest, and allows the tools
+ * agents use so they do not stop to ask at every one.
  *
  * Never clobbers by default. These are the human's own files in the human's own
  * home, and an overwrite is discovered later, by something behaving differently
@@ -96,6 +98,9 @@ function runInit(force: boolean): void {
   if (outcome === 'wrote') {
     console.log('[harness] this file shadows Herdr\'s own updates — re-run `harness init` to refresh it');
   }
+
+  const granted = grantPermissions();
+  console.log(`[harness] permissions: ${permissionsNote(granted.outcome, granted.state)}`);
 }
 
 /**
@@ -117,6 +122,21 @@ function herdrRuleNote(outcome: HerdrRuleOutcome, state: HerdrRuleState): string
       return 'Herdr has not fetched a claude manifest yet, so there is nothing to merge into';
     case 'unavailable':
       return 'the detection rule is not beside this build — run `npm run build`';
+  }
+}
+
+/** `herdrRuleNote`'s reason: two of the three outcomes change nothing. */
+function permissionsNote(outcome: PermissionsOutcome, state: PermissionsState): string {
+  const still = state.overridden.length > 0
+    ? `; ${state.overridden.join(', ')} in deny/ask still wins over it`
+    : '';
+  switch (outcome) {
+    case 'wrote':
+      return `allowed ${state.missing.join(', ')} in ${state.path} — agents no longer ask first${still}`;
+    case 'granted':
+      return `already allowed in ${state.path}${still}`;
+    case 'unreadable':
+      return `${state.path} is not JSON this can merge into — left alone`;
   }
 }
 
@@ -730,6 +750,7 @@ app.post<{ Params: { id: string } }>('/api/workspaces/:id/agents', async (req, r
   // Read once and passed to both: what the flag said and what the pane is
   // remembered as running have to be the same answer — see `startArgs`.
   const alias = modelDefault();
+  if (mayTrust(space.dir)) trustFolder(space.dir);
   try {
     // ~4s of waiting inside there, and the button says so. A start that fails
     // leaves no tab behind — see `launchAgent`.
@@ -913,6 +934,7 @@ const settingsView = (): SettingsView => ({
   checkouts: projects.all(),
   claudeFiles: claudeFiles(),
   herdr: herdrRuleState(),
+  permissions: permissionsState(),
   chromeAutoAccept: autoAcceptEnabled(),
 });
 
@@ -1036,6 +1058,16 @@ app.post<{ Body: { enabled?: boolean } }>('/api/settings/chrome', async (req, re
 app.post<{ Body: { force?: boolean } }>('/api/settings/herdr', async (req) => {
   const { outcome, state } = installHerdrRule(req.body?.force === true);
   return { ...settingsView(), note: herdrRuleNote(outcome, state) };
+});
+
+/** Append-only into Claude Code's own settings — see `grantOf`. */
+app.post('/api/settings/permissions', async (_req, reply) => {
+  try {
+    const { outcome, state } = grantPermissions();
+    return { ...settingsView(), note: permissionsNote(outcome, state) };
+  } catch (err) {
+    return reply.code(500).send({ error: `could not write settings: ${(err as Error).message}` });
+  }
 });
 
 // ---------------------------------------------------------------------------

@@ -137,6 +137,10 @@ Every one was established by probing the live system, and most fail *silently* i
     agent. Omit `lines` rather than raising it — the menu grows with the viewport. The
     menu itself is safe to read over: it marks its selection by highlight, not by `❯`,
     and Enter submits the box rather than the highlighted row.
+    **In bash mode the box has no `❯` at all.** A prompt starting `!` redraws it as `!` at
+    column 0 (then an NBSP), and the `! for shell mode` hint below it is indented — so a
+    column-0 `!` line counts as the box too, and the column is what keeps the hint out.
+    Without it a stalled `! cmd` would be judged by an older `❯` echo, or by nothing.
 15. **A LOCKFILE is the single-instance mutex, checked before the bind.** Binding the port
     used to be it, which held only while the port was fixed. It is not: `--port` exists so a
     machine already using 4373 is not locked out, and two instances on two ports means the
@@ -349,7 +353,12 @@ Every one was established by probing the live system, and most fail *silently* i
 **Nothing.** Say so plainly; do not soften it.
 
 Agents run as real `claude` CLI processes started by Herdr, loading the user's own
-`~/.claude/settings.json`, which permits `Write(*)`, `Edit(*)`, `Bash(*)`. `server/src/rules.ts`
+`~/.claude/settings.json`, into which `harness init` (or ⚙ PERMISSIONS) appends `Write`,
+`Edit`, `Bash` — and `PowerShell` on Windows, whose shell tool it is — to
+`permissions.allow` (`grantOf` in `claudeFiles.ts`). Nothing used to install that: the file
+was simply assumed to permit them, and on a machine where it did not every agent stopped at
+every tool call. Append-only, refused on a file it cannot parse, and a whole-tool `deny` or
+`ask` still wins and is reported rather than removed. `server/src/rules.ts`
 is injected via `--append-system-prompt`, and that is the entire surface. The `planner`
 those rules name is a user-level agent file (`~/.claude/agents/planner.md`) the CLI loads
 on its own, so a hand-started agent has it too — and a deleted file leaves rule 4 naming
@@ -408,8 +417,9 @@ server/src/
                       subagent and the two commands, `harness init`, the trust
                       grant for the one folder that is ours, and settings.json —
                       read for the model in force, written to put back what a
-                      per-agent switch overwrote and to hold the machine default
-                      wherever `~/.harness/claude-model` pins it
+                      per-agent switch overwrote, to hold the machine default
+                      wherever `~/.harness/claude-model` pins it, and to allow
+                      the agents' tools
   herdrRules.ts       merges our one detection rule into Herdr's current manifest
   chrome.ts           answering that dialog with "allow" when the human has said
                       it may. The only key this cockpit presses on its own
@@ -992,6 +1002,13 @@ Two things about that panel, both established on a live pane:
   agent, so it is left alone unless the flag is actually missing, goes out via a rename
   because that file holds credentials, and a failure costs the dialog rather than the
   reading. `--dangerously-skip-permissions` does NOT skip this dialog; it was measured too.
+  **A space's directory is trusted too, when the human starts an agent in it** — that
+  press is the decision the dialog would ask for again — but never the home directory or
+  an ancestor of it (`mayTrust`), for the inheritance reason above. **On Windows the key
+  is `C:/Users/…`**, forward slashes and an upper-case drive, which is how every entry
+  Claude Code itself wrote there reads; `trustFolder` used to write the native
+  `C:\Users\…`, a key nothing reads, so the grant silently missed and the dialog came up
+  anyway. `trustKey` is that spelling, and it is pinned in the tests for that reason.
 - **It is kept between readings and closed when the harness exits.** Keeping it is the
   optimisation — ~10s cold against ~1.2s warm — and it stops being one the moment the only
   process that ever talks to this agent has gone, which is when it becomes a tab nobody
@@ -1028,7 +1045,7 @@ npm test            # node:test over fixtures — no Herdr, no network, no ~/.cl
 npm run dev         # server on 4373, Vite on 4374 — open 4374 (4373 says so too)
 npm run build       # vite → dist/web, esbuild → dist/server.js
 npm start           # the real thing: one process, one port, opens itself
-harness init        # the Claude files and the Herdr rule; never clobbers
+harness init        # the Claude files, the Herdr rule, the tool grant; never clobbers
 harness stop        # NOT pkill; probes the lockfile's port before killing anything
 ```
 

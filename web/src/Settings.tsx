@@ -7,7 +7,7 @@ import { modelLabel, useApi } from './useHarness.js';
  * which checkouts they may push from, and whether the files they depend on are
  * actually on the machine.
  *
- * One fetch fills all four panels and every write returns the whole view back,
+ * One fetch fills every panel and every write returns the whole view back,
  * so nothing here maintains its own idea of the state — the same discipline the
  * board follows for a much better reason, and the reason it costs nothing here
  * is that this screen is read rarely and never while anything is moving.
@@ -20,9 +20,11 @@ export function Settings({ onClose }: { onClose: () => void }): React.ReactEleme
    * What the last write actually did, when the view alone cannot say. Installing
    * the Herdr rule can correctly decline — upstream has it, there is no manifest
    * to merge into — and every one of those answers leaves the state untouched,
-   * so without this the button looks broken.
+   * so without this the button looks broken. Kept with the route that said it,
+   * so each section shows only its own.
    */
-  const [note, setNote] = useState<string | null>(null);
+  const [note, setNote] = useState<{ from: string; text: string } | null>(null);
+  const noteOf = (path: string): string | null => (note?.from === path ? note.text : null);
 
   const load = async (): Promise<void> => {
     try {
@@ -41,7 +43,7 @@ export function Settings({ onClose }: { onClose: () => void }): React.ReactEleme
     try {
       const next = await post<SettingsView & { note?: string }>(path, body);
       setView(next);
-      if (next.note) setNote(next.note);
+      if (next.note) setNote({ from: path, text: next.note });
     } catch (e) {
       setError((e as Error).message);
     }
@@ -78,9 +80,14 @@ export function Settings({ onClose }: { onClose: () => void }): React.ReactEleme
               view={view}
               onInstall={(force) => void write('/api/settings/claude-files', { force })}
             />
+            <Permissions
+              view={view}
+              note={noteOf('/api/settings/permissions')}
+              onGrant={() => void write('/api/settings/permissions')}
+            />
             <HerdrRule
               view={view}
-              note={note}
+              note={noteOf('/api/settings/herdr')}
               onInstall={(force) => void write('/api/settings/herdr', { force })}
               onAutoAccept={(enabled) => void write('/api/settings/chrome', { enabled })}
             />
@@ -344,6 +351,47 @@ const STATUS: Record<SettingsView['claudeFiles'][number]['status'], string> = {
   differs: 'yours differs',
   unavailable: 'not in this build — run npm run build',
 };
+
+/**
+ * Without these allows every agent stops at every edit and command, which on
+ * the board is indistinguishable from agents genuinely waiting on you.
+ */
+function Permissions(
+  { view, note, onGrant }: { view: SettingsView; note: string | null; onGrant: () => void },
+): React.ReactElement {
+  const { path, status, missing, overridden } = view.permissions;
+
+  return (
+    <Section
+      title="PERMISSIONS"
+      note="Whether Claude Code's own settings let agents write files and run commands without asking. Allowing them removes a prompt, not a safeguard — nothing else gates agents here. Applies to every agent on this machine, including ones started by hand."
+    >
+      <div className="py-0.5 font-mono text-neutral-500" title={path}>{path}</div>
+      {status === 'granted' ? (
+        <div className="text-neutral-600">allowed — agents do not ask first</div>
+      ) : status === 'missing' ? (
+        <div className="text-amber-400">agents ask before every {missing.join(', ')}</div>
+      ) : (
+        <div className="text-amber-400">not JSON this can merge into — left alone</div>
+      )}
+      {overridden.length > 0 && (
+        <div className="text-amber-400">
+          {overridden.join(', ')} in deny/ask still wins over any allow
+        </div>
+      )}
+      <div className="mt-1 flex items-center gap-3">
+        <button
+          disabled={status !== 'missing'}
+          onClick={onGrant}
+          className="rounded bg-neutral-800 px-2 py-0.5 text-neutral-200 disabled:opacity-40"
+        >
+          allow
+        </button>
+      </div>
+      {note && <div className="mt-1 text-neutral-400">{note}</div>}
+    </Section>
+  );
+}
 
 /**
  * Herdr misses the Claude in Chrome permission dialog, so an agent waiting on

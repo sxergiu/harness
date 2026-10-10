@@ -39,6 +39,11 @@ an agent is told to call a subagent that does not exist, and nothing reports it.
 
 It also merges one detection rule into Herdr's manifest — see [Blocked detection](#blocked-detection).
 
+And it allows `Write`, `Edit` and `Bash` (plus `PowerShell` on Windows) in
+`~/.claude/settings.json`. Without that every agent asks before every edit and every
+command, and a column of agents waiting on you looks exactly like that. It only appends to
+`permissions.allow`, and a `deny` or `ask` naming a whole tool still wins.
+
 It **never overwrites a file you have changed**; it says `kept` and leaves yours alone.
 `--force` replaces them. Re-running it is safe and is how you refresh the Herdr rule.
 
@@ -193,6 +198,8 @@ session:
 - **CHECKOUTS** — every checkout git has been delegated in.
 - **CLAUDE FILES** — whether `planner.md`, `feature.md` and `investigate.md` are installed,
   missing, or differ from what ships. Install from here or with `harness init`.
+- **PERMISSIONS** — whether Claude Code's settings let agents edit and run commands without
+  asking, with an `allow` button that does what `harness init` does.
 - **HERDR** — the blocked-detection rule below, and whether the cockpit answers the Claude
   in Chrome dialog for you.
 

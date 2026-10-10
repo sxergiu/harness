@@ -17,8 +17,8 @@ import { Aside } from './aside.js';
 import { Board } from './board.js';
 import { autoAcceptEnabled, setAutoAccept } from './chrome.js';
 import {
-  claudeFiles, configuredAlias, configuredEffort, hold, installClaudeFiles, pinnedAlias,
-  setPinnedAlias, settleSettings,
+  claudeFiles, configuredAlias, configuredEffort, hold, installClaudeFiles, mayTrust,
+  pinnedAlias, setPinnedAlias, settleSettings, trustFolder,
 } from './claudeFiles.js';
 import { buildAgentDiff, readAgentFile, touchedPaths } from './diff.js';
 import { Herdr } from './herdr.js';
@@ -730,6 +730,7 @@ app.post<{ Params: { id: string } }>('/api/workspaces/:id/agents', async (req, r
   // Read once and passed to both: what the flag said and what the pane is
   // remembered as running have to be the same answer — see `startArgs`.
   const alias = modelDefault();
+  if (mayTrust(space.dir)) trustFolder(space.dir);
   try {
     // ~4s of waiting inside there, and the button says so. A start that fails
     // leaves no tab behind — see `launchAgent`.

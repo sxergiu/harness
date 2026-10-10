@@ -137,6 +137,10 @@ Every one was established by probing the live system, and most fail *silently* i
     agent. Omit `lines` rather than raising it — the menu grows with the viewport. The
     menu itself is safe to read over: it marks its selection by highlight, not by `❯`,
     and Enter submits the box rather than the highlighted row.
+    **In bash mode the box has no `❯` at all.** A prompt starting `!` redraws it as `!` at
+    column 0 (then an NBSP), and the `! for shell mode` hint below it is indented — so a
+    column-0 `!` line counts as the box too, and the column is what keeps the hint out.
+    Without it a stalled `! cmd` would be judged by an older `❯` echo, or by nothing.
 15. **A LOCKFILE is the single-instance mutex, checked before the bind.** Binding the port
     used to be it, which held only while the port was fixed. It is not: `--port` exists so a
     machine already using 4373 is not locked out, and two instances on two ports means the

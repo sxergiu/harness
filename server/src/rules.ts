@@ -267,6 +267,15 @@ Do not carry on the work above. It is not yours. You are here to explain it.`;
  * this safe to run against a LIVE agent: verified on pane w2:pG, the parent's
  * transcript was byte-identical afterwards, so the main feed does not move.
  */
+/**
+ * A dormant pane's conversation, resumed with the rules and model a cockpit
+ * start passes. Herdr's own restore types a bare `claude --resume <id>`, so even
+ * a restore that WORKS leaves every agent it brings back without either.
+ */
+export function resumeArgs(sessionUuid: string, start: string[]): string[] {
+  return ['--resume', sessionUuid, ...start];
+}
+
 export function asideArgs(sessionUuid: string): string[] {
   return [
     '--resume', sessionUuid,

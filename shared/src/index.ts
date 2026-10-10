@@ -250,6 +250,13 @@ export interface AgentRow {
   locked: boolean;
   /** False once the pane is gone: the row moved to RECENT. */
   live: boolean;
+  /**
+   * Herdr still holds this pane's Claude session but nothing is running in it —
+   * a restore whose `claude --resume` failed. `live` is false, since there is no
+   * agent to drive, but the pane is there and the conversation can be resumed
+   * into it. Never true on a RECENT row.
+   */
+  dormant: boolean;
 }
 
 // ---------------------------------------------------------------------------

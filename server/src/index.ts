@@ -32,7 +32,7 @@ import {
 import { admits } from './origin.js';
 import { Projects } from './projects.js';
 import {
-  modelDefault, rulesAreDefault, rulesText, setModelDefault, setRules, startArgs,
+  modelDefault, resumeArgs, rulesAreDefault, rulesText, setModelDefault, setRules, startArgs,
 } from './rules.js';
 import { Transcripts, feedTurns, subagentPathFor, subagentRows } from './transcript.js';
 import { Usage } from './usage.js';
@@ -765,6 +765,36 @@ app.post<{ Params: { id: string } }>('/api/workspaces/:id/agents', async (req, r
     board.schedule();
     return { ok: true, paneId, name };
   } catch (err) {
+    return reply.code(503).send({ error: (err as Error).message });
+  }
+});
+
+/**
+ * A dormant pane's conversation, started again in the pane that holds it — see
+ * `dormantSession`. Pressed by the human and never on the cockpit's own: a
+ * heartbeat can catch a pane Herdr is about to type its own resume into, and
+ * the shell may be somebody's by now. A `claude` that never ran leaves the row
+ * dormant to be pressed again; one that ran and exited — measured on a session
+ * that did not exist — makes Herdr clear the session like any exit, and the row
+ * moves to RECENT. Either way the pane stays, holding what went wrong.
+ */
+app.post<{ Params: { paneId: string } }>('/api/agents/:paneId/resume', async (req, reply) => {
+  const row = board.row(req.params.paneId);
+  if (!row?.dormant || !row.sessionUuid) {
+    return reply.code(409).send({ error: 'nothing to resume in this pane' });
+  }
+  const alias = modelDefault();
+  try {
+    await herdr.resumeIn(
+      row.name,
+      row.paneId,
+      resumeArgs(row.sessionUuid, startArgs(projects.gitDelegated(row.cwd), alias)),
+    );
+    if (alias) board.startedOn(row.paneId, alias);
+    board.schedule();
+    return { ok: true };
+  } catch (err) {
+    logError('resume failed', err);
     return reply.code(503).send({ error: (err as Error).message });
   }
 });

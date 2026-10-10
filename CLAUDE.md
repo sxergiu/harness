@@ -319,6 +319,34 @@ Every one was established by probing the live system, and most fail *silently* i
     its one caller that is right twice over, a login that went wrong being exactly what the
     human is being shown. Both live in `herdr.ts` and nothing outside it calls `tab.create`;
     that was never mechanical (`request` is public) and is one review away from a third.
+    `resumeIn` is a third `agent.start` site but creates no tab, so it closes none: the
+    pane it starts in is a dormant one (invariant 20), which was never ours.
+20. **A Herdr restore that fails leaves a bare shell still holding `agent_session`, and the
+    board used to drop it.** Herdr resumes a saved session by typing `claude --resume <id>`
+    into a fresh shell, and the pane carries the id before anything runs. Measured
+    2026-10-10: Claude Code updated itself across a Herdr restart, its `claude` shims were
+    deleted and recreated over ~10s (9:36:10–21), Herdr typed into ten panes at 9:36:12–15,
+    and every one answered "not recognized". PATH was correct throughout — read off the live
+    server's and the shells' environment blocks — so this is a race no install step can
+    close, on any OS where npm relinks bins. Nor is it configurable: Herdr's only knob is
+    `resume_agents_on_restore`, and `resume_argv` wants a bare command name, which loses the
+    same race. Ten conversations vanished from the board at once, because `if (!p.agent)
+    continue` read those panes as shells.
+    **That shape is unambiguous**: `/exit` and a killed process both CLEAR `agent_session`,
+    measured on a live pane, so no agent plus a session id is a failed restore and nothing
+    else. `dormantSession` keeps it on the board, `live: false` and `dormant: true`, named
+    from RECENT (matched on the session too, since pane ids recycle) or its tab label, and
+    reading its transcript like any row. Instruments are excluded by TAB LABEL here — no
+    agent means no Herdr name for `isInstrument` — and a dormant aside on the board would be
+    invariant 18.
+    **Resuming is a button and never automatic.** A heartbeat can land between Herdr's
+    restore and its own typing (it spaces resumes 100ms apart after a client attaches), and
+    resuming then starts one session twice in one pane; the shell may also be somebody's
+    by now; and the cockpit presses keys unasked in one place only (`chrome.ts`). The
+    resume passes `startArgs`, which Herdr's bare `claude --resume` drops even when it
+    works — so every agent a successful restore brings back is running without its rules.
+    A `claude` that runs and exits (a session that is gone) clears the id like any exit and
+    the row moves to RECENT; one that never ran leaves it dormant to be pressed again.
 
 ## What enforcement guarantees
 
@@ -374,7 +402,8 @@ server/src/
   index.ts            Fastify routes + WS transport. Holds no state.
   herdr.ts            socket client — one-shot requests, one streaming subscription.
                       `launchAgent` is the only thing that creates a tab, and closes
-                      one it cannot start an agent in
+                      one it cannot start an agent in; `resumeIn` starts one in a
+                      dormant pane and closes nothing
   transcript.ts       JSONL: slug resolution, incremental tailing, turns, activity, todo
   board.ts            THE JOIN. rows, stateSince, contention, notifications
   diff.ts             per-file diffs from tool results

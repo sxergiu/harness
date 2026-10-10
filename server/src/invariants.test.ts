@@ -4,7 +4,7 @@ import { join, resolve } from 'node:path';
 import { test } from 'node:test';
 import { aliasRuns, sameAccount } from '@harness/shared';
 import { parse as parseAccounts, rowFor, statusOf } from './account.js';
-import { seedCwd } from './board.js';
+import { dormantSession, seedCwd } from './board.js';
 import {
   HOLD_MS, decide, grantOf, holdFor, mayTrust, pinAction, settleAction, trustKey,
 } from './claudeFiles.js';
@@ -17,7 +17,7 @@ import { isOurs, merge, versionOf } from './herdrRules.js';
 import { shouldOpen, type Running } from './instance.js';
 import { admits, isLocal } from './origin.js';
 import { parse } from './projects.js';
-import { argsFor, DEFAULT_RULES, flatten, modelFrom, rulesFor } from './rules.js';
+import { argsFor, DEFAULT_RULES, flatten, modelFrom, resumeArgs, rulesFor } from './rules.js';
 import {
   aliasDisproven, contextOf, effortDisproven, effortOf, goalOf, modelOf, slugForCwd, windowFor, type Entry,
 } from './transcript.js';
@@ -912,4 +912,46 @@ test('A TIE SEEDS NOTHING — listing order is not evidence', () => {
 test('a space with no panes of its own has no directory', () => {
   assert.equal(seedCwd([], 'w0', new Map()), null);
   assert.equal(seedCwd([paneAt('q1', '/repos/a', { workspace_id: 'wZ' })], 'w0', new Map()), null);
+});
+
+// -- dormant panes ---------------------------------------------------------
+// A restore whose resume failed leaves a bare shell holding the session. The
+// board used to drop every pane with no agent, so ten conversations vanished at
+// once with nothing on screen saying they had — a dropped pane looks exactly
+// like a pane that was never there.
+
+const session = { value: 'u1', kind: 'id' as const, agent: 'claude' };
+
+test('A FAILED RESTORE IS DORMANT, which is the shape the incident left', () => {
+  assert.equal(dormantSession(paneAt('p1', '/repos/a', { agent_session: session }), 'agent-5'), 'u1');
+});
+
+test('a running agent and a plain shell are not dormant', () => {
+  const running = paneAt('p1', '/repos/a', { agent: 'claude', agent_session: session });
+  assert.equal(dormantSession(running, 'agent-5'), null);
+  assert.equal(dormantSession(paneAt('p2', '/repos/a'), '1'), null);
+  const byPath = paneAt('p3', '/repos/a', { agent_session: { ...session, kind: 'path' } });
+  assert.equal(dormantSession(byPath, null), null);
+  const other = paneAt('p4', '/repos/a', { agent_session: { ...session, agent: 'codex' } });
+  assert.equal(dormantSession(other, null), null);
+});
+
+test('a dormant instrument stays off the board (invariant 18)', () => {
+  // No agent means no Herdr name for `isInstrument`, so the tab label is all
+  // that says this was a fork — whose transcript is the parent's changelist.
+  const pane = paneAt('p1', '/repos/a', { agent_session: session });
+  assert.equal(dormantSession(pane, 'aside'), null);
+  assert.equal(dormantSession(pane, 'usage'), null);
+});
+
+test('a RECENT row is never resumable, whatever the file says', () => {
+  const rows = parseRecent(JSON.stringify({ version: 1, rows: [{ paneId: 'w1:p1', name: 'a', dormant: true }] }));
+  assert.equal(rows[0]?.dormant, false);
+});
+
+test('a resume carries the rules Herdr’s own resume drops', () => {
+  const args = resumeArgs('u1', argsFor('rules', 'opus'));
+  assert.deepEqual(args.slice(0, 2), ['--resume', 'u1']);
+  assert.ok(args.includes('--append-system-prompt'));
+  assert.ok(args.includes('--model'));
 });

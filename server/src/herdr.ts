@@ -326,9 +326,18 @@ export interface PaneInfo {
   /** A custom Herdr name. Absent until something renames the agent. */
   name?: string;
   agent_status?: string;
-  agent_session?: { value: string; kind: 'id' | 'path' };
+  /**
+   * Outlives the agent in exactly one case: a restored pane whose resume failed.
+   * `/exit` and a killed process both clear it — see `dormantSession`.
+   */
+  agent_session?: { value: string; kind: 'id' | 'path'; agent?: string };
   terminal_title_stripped?: string;
   focused?: boolean;
+}
+
+export interface TabInfo {
+  tab_id: string;
+  label: string | null;
 }
 
 export interface WorkspaceInfo {
@@ -358,6 +367,7 @@ export interface Snapshot {
   protocol: number;
   version: string;
   workspaces: WorkspaceInfo[];
+  tabs: TabInfo[];
   panes: PaneInfo[];
   agents: AgentInfo[];
 }
@@ -862,6 +872,22 @@ export class Herdr {
       throw err;
     }
     return paneId;
+  }
+
+  /**
+   * An agent started in a pane that already exists — a dormant one, whose
+   * restore failed and left a shell at its prompt. The same three steps as
+   * `launchAgent` after its `tab.create`, and the one difference is the point:
+   * a failure does NOT close the pane. It is not ours, and it holds the only
+   * account of why the resume failed, which travels out in the error as well.
+   */
+  async resumeIn(name: string, paneId: string, args: string[]): Promise<void> {
+    await this.waitForPrompt(paneId);
+    await this.startAgent(name, paneId, args);
+    if (!(await this.waitForLaunch(name))) {
+      const why = await this.lastOutput(paneId);
+      throw new Error(`${name} exited as soon as it started${why ? `: ${why}` : ''}`);
+    }
   }
 
   /** Closes a pane, and with it the tab when it was the tab's only one. */

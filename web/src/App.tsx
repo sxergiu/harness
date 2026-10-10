@@ -1310,6 +1310,9 @@ function BoardRow(
         {agent.error && (
           <div className="truncate pl-6 text-red-400" title={agent.error}>⚠ {agent.error}</div>
         )}
+        {agent.dormant && (
+          <div className="truncate pl-6 text-neutral-500">not running — open to resume</div>
+        )}
         {agent.goal && (
         <div className={`truncate pl-6 ${agent.goal.met ? 'text-emerald-500' : 'text-violet-400'}`}>
           ◎ {agent.goal.condition}

@@ -7,10 +7,10 @@ import fastifyStatic from '@fastify/static';
 import Fastify from 'fastify';
 import { WebSocketServer, type WebSocket } from 'ws';
 import {
-  AGENT_SHADES, BIND_HOST, DEFAULT_PORT, DEV_PAGE_PORT, EFFORTS, MODELS, WS_PATH,
+  AGENT_SHADES, BIND_HOST, DEFAULT_PORT, DEV_PAGE_PORT, EFFORTS, MODELS, WS_PATH, bashMode,
   type AccountView, type AgentDiff, type AgentShade, type AsideView, type BlockedView,
   type FeedEntry, type FeedPage, type FileContent, type HerdrRuleState, type PermissionsState,
-  type ServerEvent, type SettingsView, type SubagentsView, type UsageView,
+  type ServerEvent, type SettingsView, type ShellTail, type SubagentsView, type UsageView,
 } from '@harness/shared';
 import { Account } from './account.js';
 import { Aside } from './aside.js';
@@ -22,7 +22,7 @@ import {
   type PermissionsOutcome,
 } from './claudeFiles.js';
 import { buildAgentDiff, readAgentFile, touchedPaths } from './diff.js';
-import { Herdr } from './herdr.js';
+import { Herdr, shellTail } from './herdr.js';
 import { herdrRuleState, installHerdrRule, type HerdrRuleOutcome } from './herdrRules.js';
 import { History } from './history.js';
 import { log, logError, logStart } from './log.js';
@@ -430,6 +430,22 @@ app.get<{ Params: { paneId: string } }>('/api/agents/:paneId/blocked', async (re
   }
 });
 
+/**
+ * What a bash-mode run is printing while it runs, for the box that started it.
+ * The WHOLE visible pane, for `prompt`'s reason: a long output pushes the echo
+ * up past any fixed window.
+ */
+app.get<{ Params: { paneId: string }; Querystring: { head?: string } }>(
+  '/api/agents/:paneId/shell',
+  async (req, reply) => {
+    try {
+      return { lines: shellTail(await herdr.read(req.params.paneId), req.query.head ?? '') } satisfies ShellTail;
+    } catch (err) {
+      return reply.code(503).send({ error: (err as Error).message });
+    }
+  },
+);
+
 // ---------------------------------------------------------------------------
 // Actions
 // ---------------------------------------------------------------------------
@@ -453,6 +469,24 @@ app.post<{ Params: { paneId: string }; Body: { text?: string } }>(
     const text = req.body?.text?.trim();
     if (!text) return reply.code(400).send({ error: 'text is required' });
     return act(reply, () => herdr.prompt(req.params.paneId, text));
+  },
+);
+
+/**
+ * Runs a fenced block from the agent's prose through Claude Code's bash mode,
+ * so the output lands in the agent's own context and transcript. The block
+ * arrives as written and is turned into the `!` line here — the browser cannot
+ * have anything typed that `bashMode` would not have produced.
+ */
+app.post<{ Params: { paneId: string }; Body: { code?: unknown; language?: unknown } }>(
+  '/api/agents/:paneId/shell',
+  async (req, reply) => {
+    const { code, language } = req.body ?? {};
+    const command = typeof code === 'string'
+      ? bashMode(code, typeof language === 'string' ? language : null)
+      : null;
+    if (!command) return reply.code(400).send({ error: 'not a runnable shell block' });
+    return act(reply, () => herdr.prompt(req.params.paneId, `! ${command}`));
   },
 );
 

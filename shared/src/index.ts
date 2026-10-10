@@ -640,6 +640,21 @@ export interface HerdrRuleState {
   stale: boolean;
 }
 
+/**
+ * Whether `~/.claude/settings.json` lets agents write, edit and run commands
+ * without asking. Without it every agent stops at every tool call, which reads
+ * on the board as a column of agents permanently blocked.
+ */
+export interface PermissionsState {
+  path: string;
+  /** `unreadable`: there, and not JSON this can merge into — never written over. */
+  status: 'granted' | 'missing' | 'unreadable';
+  /** The tools not yet allowed. Empty when granted. */
+  missing: string[];
+  /** Whole-tool `deny`/`ask` entries, which win over any allow. */
+  overridden: string[];
+}
+
 export interface SettingsView {
   rules: {
     text: string;
@@ -683,6 +698,7 @@ export interface SettingsView {
   checkouts: Array<{ path: string; gitDelegated: boolean }>;
   claudeFiles: ClaudeFileState[];
   herdr: HerdrRuleState;
+  permissions: PermissionsState;
   /**
    * Whether the cockpit answers Claude in Chrome's site-permission dialog with
    * "allow" itself. Off unless the human turns it on, and useless without the

@@ -6,7 +6,7 @@ import { aliasRuns, sameAccount } from '@harness/shared';
 import { parse as parseAccounts, rowFor, statusOf } from './account.js';
 import { seedCwd } from './board.js';
 import {
-  HOLD_MS, decide, holdFor, mayTrust, pinAction, settleAction, trustKey,
+  HOLD_MS, decide, grantOf, holdFor, mayTrust, pinAction, settleAction, trustKey,
 } from './claudeFiles.js';
 import { buildAgentDiff, within } from './diff.js';
 import {
@@ -463,6 +463,34 @@ test('trust is keyed the way Claude Code keys it, and never reaches the home tre
   assert.equal(mayTrust('/Users', '/Users/me', 'darwin'), false);
   assert.equal(mayTrust('/', '/Users/me', 'darwin'), false);
   assert.equal(mayTrust('/Users/me2', '/Users/me', 'darwin'), true);
+});
+
+test('the tool grant only appends, and keeps everything of the human\'s own', () => {
+  const tools = ['Write', 'Edit', 'Bash'];
+  const mine = {
+    theme: 'dark',
+    permissions: { allow: ['Read(src/**)', 'Bash(*)'], deny: ['Bash(rm:*)'], defaultMode: 'default' },
+  };
+  const grant = grantOf(mine, tools)!;
+  // `Bash(*)` is all of Bash already, and a narrowed deny is a deliberate
+  // restriction rather than something overriding the grant.
+  assert.deepEqual(grant.missing, ['Write', 'Edit']);
+  assert.deepEqual(grant.overridden, []);
+  assert.deepEqual(grant.next, {
+    theme: 'dark',
+    permissions: {
+      allow: ['Read(src/**)', 'Bash(*)', 'Write', 'Edit'],
+      deny: ['Bash(rm:*)'],
+      defaultMode: 'default',
+    },
+  });
+  assert.deepEqual(grantOf(grant.next, tools)!.missing, []);
+
+  assert.deepEqual(grantOf({ permissions: { ask: ['Edit'] } }, tools)!.overridden, ['Edit']);
+  assert.deepEqual(grantOf({}, tools)!.next, { permissions: { allow: tools } });
+  // A shape we would have to guess about is never written over.
+  assert.equal(grantOf({ permissions: { allow: 'Bash' } }, tools), null);
+  assert.equal(grantOf([], tools), null);
 });
 
 test('the model is read past a subagent, whose requests are its own', () => {

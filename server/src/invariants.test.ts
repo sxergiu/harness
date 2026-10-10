@@ -5,7 +5,9 @@ import { test } from 'node:test';
 import { aliasRuns, sameAccount } from '@harness/shared';
 import { parse as parseAccounts, rowFor, statusOf } from './account.js';
 import { seedCwd } from './board.js';
-import { HOLD_MS, decide, holdFor, pinAction, settleAction } from './claudeFiles.js';
+import {
+  HOLD_MS, decide, holdFor, mayTrust, pinAction, settleAction, trustKey,
+} from './claudeFiles.js';
 import { buildAgentDiff, within } from './diff.js';
 import {
   announces, backoffMs, paneTookText, promptBoxHolds, staleServerWarning, type PaneInfo,
@@ -433,6 +435,23 @@ test('a pin asserts only on drift, and an unpinned default is left alone', () =>
   // loop over Claude Code's own settings — invisible until it clobbered
   // something a concurrent write had just put there.
   assert.equal(pinAction('opus[1m]', 'opus[1m]'), 'leave');
+});
+
+test('trust is keyed the way Claude Code keys it, and never reaches the home tree', () => {
+  // A key in any other spelling is one Claude Code never reads, so the dialog
+  // comes up anyway with nothing saying the grant missed.
+  assert.equal(trustKey('c:\\Users\\me\\repo\\', 'win32'), 'C:/Users/me/repo');
+  assert.equal(trustKey('C:\\', 'win32'), 'C:/');
+  assert.equal(trustKey('/Users/me/repo/', 'darwin'), '/Users/me/repo');
+  assert.equal(trustKey('/', 'darwin'), '/');
+
+  assert.equal(mayTrust('C:\\Users\\me\\repos\\x', 'C:\\Users\\me', 'win32'), true);
+  // Trust is inherited, so home or any ancestor of it would trust everything.
+  assert.equal(mayTrust('c:/users/ME', 'C:\\Users\\me', 'win32'), false);
+  assert.equal(mayTrust('C:\\', 'C:\\Users\\me', 'win32'), false);
+  assert.equal(mayTrust('/Users', '/Users/me', 'darwin'), false);
+  assert.equal(mayTrust('/', '/Users/me', 'darwin'), false);
+  assert.equal(mayTrust('/Users/me2', '/Users/me', 'darwin'), true);
 });
 
 test('the model is read past a subagent, whose requests are its own', () => {

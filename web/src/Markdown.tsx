@@ -1,4 +1,4 @@
-import { CodeBlock } from './CodeBlock.js';
+import { CodeBlock, type ShellRunner } from './CodeBlock.js';
 import { fileRef, type FileViewer } from './fileRef.js';
 
 /**
@@ -10,9 +10,12 @@ import { fileRef, type FileViewer } from './fileRef.js';
  * `viewer` makes a code span that names a file clickable. Optional, so prose
  * with nowhere to open a file into still renders — and threaded as a prop rather
  * than through a context, which this codebase has none of.
+ *
+ * `runner` makes a shell block runnable in the agent, threaded the same way and
+ * for the same reason.
  */
 export function Markdown(
-  { source, viewer }: { source: string; viewer?: FileViewer },
+  { source, viewer, runner }: { source: string; viewer?: FileViewer; runner?: ShellRunner },
 ): React.ReactElement {
   const blocks: React.ReactElement[] = [];
   const lines = source.split('\n');
@@ -44,7 +47,12 @@ export function Markdown(
   const flushFence = (): void => {
     if (!fence) return;
     blocks.push(
-      <CodeBlock key={blocks.length} code={fence.lines.join('\n')} language={fence.lang || null} />,
+      <CodeBlock
+        key={blocks.length}
+        code={fence.lines.join('\n')}
+        language={fence.lang || null}
+        runner={runner}
+      />,
     );
     fence = null;
   };

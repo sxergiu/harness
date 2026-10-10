@@ -921,6 +921,19 @@ three are verified working through that path.
 - **`/goal <condition>`** makes Claude keep working unprompted until a fast model judges the
   condition met. `/goal clear` (or stop/off/reset/none/cancel) removes it; `/clear` drops it
   too.
+- **`! <command>` is Claude Code's bash mode, and a prose block's ▶ run is that and nothing
+  more.** `POST /api/agents/:paneId/shell` turns a fenced block into the `!` line
+  (`bashMode` in `shared`, so the browser can recognise the run it started) and sends it
+  through `herdr.prompt`. Measured on 2.1.295: a run is recorded as TWO `user` entries,
+  `<bash-input> cmd</bash-input>` then `<bash-stdout>…</bash-stdout><bash-stderr>…</bash-stderr>`
+  — the leading space is absent when the run was queued behind a working agent — and only
+  once it has finished, so `feedTurns` folds the pair into one `shell` entry and the live
+  output while it runs comes off the pane (`shellTail`). **No exit code is recorded
+  anywhere**, so a box shows what was printed and never claims success. **Every `!` costs
+  the agent a model turn**: it answers the output unprompted. `!` runs Git Bash on
+  Windows, so a PowerShell block goes in as `powershell -NoProfile -Command '…'` with a `'`
+  written `'\''` — doubling it, PowerShell's own escape, is eaten by bash first. `console`
+  blocks are not runnable: they are sessions, and running one runs its output.
 - **`/feature <what to build>`** and **`/investigate <what to look into>`** are user-level
   commands (`~/.claude/commands/feature.md`, `investigate.md`), so they are the human's files
   and not ours. `assignmentOf` reads the newest of the two back off the transcript — the

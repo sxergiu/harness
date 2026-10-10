@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import type { FeedEntry, FeedPage, FeedTurn } from '@harness/shared';
-import { CodeBlock } from './CodeBlock.js';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import type { FeedEntry, FeedPage, FeedTurn, ShellTail } from '@harness/shared';
+import { CodeBlock, ShellOutput, type ShellRunner } from './CodeBlock.js';
 import type { FileViewer } from './fileRef.js';
 import { Markdown } from './Markdown.js';
 import { Spinner } from './Status.js';
@@ -16,16 +16,20 @@ import { useApi } from './useHarness.js';
  * `jump` is a counter the prompt bar bumps to mean "take me to my last prompt".
  * The feed owns what that means, because it is the only thing here that knows
  * which entry the human last typed.
+ *
+ * `agent` is what makes the prose's shell blocks runnable. Absent for an agent
+ * that has ended, where there is nobody left to run them.
  */
 export function Feed(
-  { paneId, tick, jump, viewer }: {
+  { paneId, tick, jump, viewer, agent }: {
     paneId: string;
     tick: number;
     jump: number;
     viewer?: FileViewer;
+    agent?: { name: string; working: boolean };
   },
 ): React.ReactElement {
-  const { get } = useApi();
+  const { get, post } = useApi();
   const [turns, setTurns] = useState<FeedTurn[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
@@ -168,6 +172,29 @@ export function Feed(
     if (moved && !first) spotlight();
   }, [latestKey, spotlight]);
 
+  const name = agent?.name;
+  const working = agent?.working ?? false;
+  const tail = useCallback(
+    (head: string) =>
+      get<ShellTail>(`/api/agents/${paneId}/shell?head=${encodeURIComponent(head)}`).then((t) => t.lines),
+    [get, paneId],
+  );
+  /**
+   * Rebuilt with the turns, so a block sees a run land on the same refetch that
+   * brings it. The feed always holds the newest turn, which is what makes
+   * `newest` the turn a run started now must come after.
+   */
+  const runner = useMemo<Omit<ShellRunner, 'since'> | undefined>(() => name === undefined ? undefined : {
+    agent: name,
+    working,
+    tick,
+    newest: turns[turns.length - 1]?.index ?? -1,
+    run: async (code, language) => { await post(`/api/agents/${paneId}/shell`, { code, language }); },
+    tail,
+    runs: (command) => turns.flatMap((t) => t.entries.flatMap((e) =>
+      e.kind === 'shell' && e.command === command ? [{ turn: t.index, run: e }] : [])),
+  }, [name, working, tick, turns, paneId, post, tail]);
+
   // Three different nothings, which the panel used to report as one.
   if (turns.length === 0) {
     if (!loaded) return <div className="p-4 text-xs"><Spinner label="reading transcript…" /></div>;
@@ -217,10 +244,15 @@ export function Feed(
                         : 'bg-transparent text-xs'
                     }`}
                   >
-                    <EntryRow entry={e} viewer={viewer} />
+                    <EntryRow entry={e} viewer={viewer} runner={runner && { ...runner, since: t.index }} />
                   </div>
                 )
-                : <EntryRow key={i} entry={e} viewer={viewer} />
+                : <EntryRow
+                  key={i}
+                  entry={e}
+                  viewer={viewer}
+                  runner={runner && { ...runner, since: t.index }}
+                />
             )}
           </div>
         ))}
@@ -253,7 +285,7 @@ function merge(prev: FeedTurn[], turn: FeedTurn | null): FeedTurn[] {
  * thing here and another thing there.
  */
 export function EntryRow(
-  { entry, viewer }: { entry: FeedEntry; viewer?: FileViewer },
+  { entry, viewer, runner }: { entry: FeedEntry; viewer?: FileViewer; runner?: ShellRunner },
 ): React.ReactElement {
   // A row that ran SQL starts open: the query is the point of the row, and
   // hiding it behind a click would leave the 80-char clipped summary as the
@@ -290,8 +322,22 @@ export function EntryRow(
     );
   }
 
+  // A bash-mode run — the human's, typed or sent from a block — as the command
+  // and what it printed, not the two XML entries it is recorded as.
+  if (entry.kind === 'shell') {
+    return (
+      <CodeBlock code={entry.command} language="bash">
+        <ShellOutput output={entry.output} />
+      </CodeBlock>
+    );
+  }
+
   if (entry.kind === 'text') {
-    return <div className="my-2 text-neutral-300"><Markdown source={entry.text} viewer={viewer} /></div>;
+    return (
+      <div className="my-2 text-neutral-300">
+        <Markdown source={entry.text} viewer={viewer} runner={runner} />
+      </div>
+    );
   }
 
   // A failed request stood in for the response. Shown as plain text — which is

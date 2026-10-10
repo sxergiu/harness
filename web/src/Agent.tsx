@@ -744,7 +744,15 @@ export function AgentView(
         {/* Each tab owns its own height: the diff scrolls its tree and its hunks
             apart, and the feed needs its scrollport to be its own element. */}
         <div className="min-w-0 flex-1 overflow-hidden">
-          {tab === 'feed' && <Feed paneId={agent.paneId} tick={tick} jump={jump} viewer={viewer} />}
+          {tab === 'feed' && (
+            <Feed
+              paneId={agent.paneId}
+              tick={tick}
+              jump={jump}
+              viewer={viewer}
+              agent={agent.live ? { name: agent.name, working: agent.status === 'working' } : undefined}
+            />
+          )}
           {tab === 'diff' && <DiffTab paneId={agent.paneId} tick={tick} />}
           {tab === 'subagents' && (
             <SubagentsTab paneId={agent.paneId} tick={tick} viewer={viewer} />

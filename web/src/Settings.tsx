@@ -53,6 +53,7 @@ export function Settings({ onClose }: { onClose: () => void }): React.ReactEleme
     <div className="flex h-full flex-col text-xs">
       <header className="flex items-center gap-2 border-b border-neutral-800 px-3 py-1.5">
         <span className="text-neutral-300">settings</span>
+        {view?.version && <span className="text-neutral-600">harness {view.version}</span>}
         <button onClick={onClose} className="ml-auto text-neutral-400 hover:text-neutral-200">
           close
         </button>

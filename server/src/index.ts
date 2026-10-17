@@ -957,7 +957,15 @@ app.post<{ Params: { id: string } }>('/api/tabs/:id/close', async (req, reply) =
  * is cached or broadcast: none of it changes unless somebody changes it on this
  * screen, and it is read far too rarely to be worth keeping in step.
  */
+/**
+ * Read once, at start: this is the version RUNNING. An upgrade installed under a
+ * live cockpit rewrites the manifest beside it, and reading it per request would
+ * report the new version from the old code.
+ */
+const runningVersion = packageVersion();
+
 const settingsView = (): SettingsView => ({
+  version: runningVersion,
   rules: { text: rulesText(), isDefault: rulesAreDefault() },
   model: {
     alias: modelDefault(),
@@ -1266,7 +1274,7 @@ if (!claim(port)) {
 // Opened after the bind, so the file describes a cockpit that is actually up
 // and a failed start leaves the previous run's log intact to explain itself.
 logStart({
-  harness: packageVersion() ?? 'unknown',
+  harness: runningVersion ?? 'unknown',
   node: process.versions.node,
   platform: process.platform,
   port,

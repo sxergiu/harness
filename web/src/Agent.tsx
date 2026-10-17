@@ -3,6 +3,7 @@ import {
   EFFORTS, MODELS,
   type AgentRow, type AsideView, type BlockedView, type EffortLevel, type ModelAlias,
 } from '@harness/shared';
+import { useSelectionCopy } from './copyOnSelect.js';
 import { DiffTab } from './Diff.js';
 import { EntryRow, Feed } from './Feed.js';
 import type { FileViewer } from './fileRef.js';
@@ -285,9 +286,11 @@ export const nameTone = (assignment: AgentRow['assignment']): string =>
  * agent's.
  */
 export function AgentView(
-  { agent, tick }: { agent: AgentRow; tick: number },
+  { agent, tick, copyOnSelect }: { agent: AgentRow; tick: number; copyOnSelect: boolean },
 ): React.ReactElement {
   const { post } = useApi();
+  const root = useRef<HTMLDivElement>(null);
+  const copied = useSelectionCopy(root, copyOnSelect);
   const [tab, setTab] = useState<'feed' | 'diff' | 'subagents'>('feed');
   const [prompt, setPrompt] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -513,7 +516,8 @@ export function AgentView(
   };
 
   return (
-    <div className="flex h-full flex-col text-xs">
+    <div ref={root} className="flex h-full flex-col text-xs">
+      {copied}
       <header className="flex items-center gap-2 border-b border-neutral-800 px-3 py-2">
         <StatusDot agent={agent} />
         <span className={`truncate ${nameTone(agent.assignment)}`}>{agent.name}</span>

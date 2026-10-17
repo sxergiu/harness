@@ -4,6 +4,7 @@ import {
   type KnownAccount, sameAccount, type UsageView, type WorkspaceRow,
 } from '@harness/shared';
 import { ASSIGN, AgentView, PROMPT_ROW_H, nameTone } from './Agent.js';
+import { useCopyOnSelect } from './copyOnSelect.js';
 import { Settings } from './Settings.js';
 import { ContextMeter, ForkRing, StatusDot, Working } from './Status.js';
 import { useTheme } from './theme.js';
@@ -26,6 +27,7 @@ export function App(): React.ReactElement {
   const [selected, setSelected] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const { theme, toggle: toggleTheme } = useTheme();
+  const copyOnSelect = useCopyOnSelect();
   /**
    * Held here rather than in the agent view: the panel is docked to this column,
    * and the agent view remounts on every `/clear`, which would drop it.
@@ -155,6 +157,12 @@ export function App(): React.ReactElement {
                 onClick={toggleTheme}
               />
               <IconButton
+                label="⧉"
+                title={`Copy text selected in the agent view: ${copyOnSelect.on ? 'on' : 'off'}`}
+                on={copyOnSelect.on}
+                onClick={copyOnSelect.toggle}
+              />
+              <IconButton
                 label="⚙"
                 title="Rules, checkouts and the files the agents depend on"
                 onClick={() => setSettingsOpen((s) => !s)}
@@ -260,6 +268,7 @@ export function App(): React.ReactElement {
               key={`${current.paneId}:${current.sessionUuid ?? ''}`}
               agent={current}
               tick={state.tick}
+              copyOnSelect={copyOnSelect.on}
             />
           ) : (
             <div className="p-6 text-xs text-neutral-600">Select an agent.</div>
@@ -1441,10 +1450,12 @@ function NameEditor(
 }
 
 function IconButton(
-  { label, title, onClick, className = '' }: {
+  { label, title, onClick, on = false, className = '' }: {
     label: string;
     title: string;
     onClick: () => void;
+    /** Lit as though hovered, for a button that is a switch. */
+    on?: boolean;
     className?: string;
   },
 ): React.ReactElement {
@@ -1452,7 +1463,7 @@ function IconButton(
     <button
       title={title}
       onClick={onClick}
-      className={`rounded px-1 text-neutral-500 hover:bg-neutral-800 hover:text-neutral-200 ${className}`}
+      className={`rounded px-1 ${on ? 'text-neutral-200' : 'text-neutral-500'} hover:bg-neutral-800 hover:text-neutral-200 ${className}`}
     >
       {label}
     </button>

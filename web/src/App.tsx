@@ -1322,6 +1322,9 @@ function BoardRow(
         {agent.dormant && (
           <div className="truncate pl-6 text-neutral-500">not running — open to resume</div>
         )}
+        {agent.stalled && (
+          <div className="truncate pl-6 text-neutral-500">not up after 30s — open to close</div>
+        )}
         {agent.goal && (
         <div className={`truncate pl-6 ${agent.goal.met ? 'text-emerald-500' : 'text-violet-400'}`}>
           ◎ {agent.goal.condition}
@@ -1403,9 +1406,11 @@ function BoardRow(
             ⠿
           </span>
         )}
-        {agent.live && (
+        {/* A stalled launch takes ✕ and not ✎: Herdr refuses to rename an
+            agent whose startup is pending, and closing is all it is for. */}
+        {(agent.live || agent.stalled) && (
           <span className="flex opacity-0 group-hover/row:opacity-100">
-            <IconButton label="✎" title="Rename this agent" onClick={() => setRenaming(true)} />
+            {agent.live && <IconButton label="✎" title="Rename this agent" onClick={() => setRenaming(true)} />}
             <IconButton
               label={closing ? '·' : '✕'}
               title="Close this agent's tab — ends it and takes the pane with it"

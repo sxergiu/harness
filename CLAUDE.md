@@ -304,6 +304,21 @@ Every one was established by probing the live system, and most fail *silently* i
     account of what went wrong off the screen, so the last non-prompt line it printed
     travels out in the error instead — "No conversation found with session ID: …" reaches
     the browser rather than a bare 503.
+    **And Herdr does not ALWAYS drop a dead launch.** Measured on Windows: a start whose
+    `claude` the shell could not find (`Start-Process : … cannot find the file specified`)
+    stayed `launch_pending`, with no `agent` kind, indefinitely — so the 20s deadline read it
+    as slow, returned the pane, and the board dropped it as a bare shell while Herdr went on
+    holding its NAME: every later start in that space failed "agent name … is already used",
+    naming a pane nothing on screen showed. Three fixes, one per hole. `waitForLaunch` treats
+    still-pending-at-the-deadline as dead when nothing came up as an agent AND the pane's last
+    line is a shell prompt with no `─` rule anywhere in the tail (`returnedToShell` — Claude
+    Code's box is a `❯` line and a custom status line can end in `%`, but a live agent always
+    draws its rules). `nextAgentName` avoids every name in the snapshot's `agents[]`, not
+    just the board's rows, and a resume goes through it too, since a resume that died leaves
+    its name held the same way. And a pane pending past `STALLED_AFTER_MS` is a `stalled` row
+    with a close button rather than nothing — `launchStalled`, clocked by us like
+    `stateSince`, never remembered in RECENT and never announced as an exit. It is TIME ALONE,
+    so the row says "not up after 30s" and sends you to the pane, never "never started".
     **There are TWO tab creators now, and they own different failures.** `launchCommand`
     is the second, for `claude auth login`, which is not an agent and has to stay on
     screen while a human finishes it in a browser. Herdr cannot run a command in a pane at

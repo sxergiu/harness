@@ -1297,11 +1297,12 @@ herdr.start();
 board.start();
 
 const url = urlFor(port);
+const v = runningVersion ? `v${runningVersion} ` : '';
 if (built) {
-  console.log(`[harness] ${url}`);
+  console.log(`[harness] ${v}${url}`);
   if (!values['no-open']) openBrowser(url);
 } else {
-  console.log(`[harness] api on ${url} — no build here, so run Vite for the page`);
+  console.log(`[harness] ${v}api on ${url} — no build here, so run Vite for the page`);
 }
 
 /**

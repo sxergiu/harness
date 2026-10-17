@@ -4,13 +4,13 @@ import { join, resolve } from 'node:path';
 import { test } from 'node:test';
 import { aliasRuns, bashMode, sameAccount } from '@harness/shared';
 import { parse as parseAccounts, rowFor, statusOf } from './account.js';
-import { dormantSession, seedCwd } from './board.js';
+import { dormantSession, launchStalled, seedCwd } from './board.js';
 import {
   HOLD_MS, decide, grantOf, holdFor, mayTrust, pinAction, settleAction, trustKey,
 } from './claudeFiles.js';
 import { buildAgentDiff, within } from './diff.js';
 import {
-  announces, backoffMs, paneTookText, promptBoxHolds, shellTail, staleServerWarning, type PaneInfo,
+  announces, backoffMs, paneTookText, promptBoxHolds, returnedToShell, shellTail, staleServerWarning, type PaneInfo,
 } from './herdr.js';
 import { parse as parseRecent } from './history.js';
 import { isOurs, merge, versionOf } from './herdrRules.js';
@@ -1043,4 +1043,39 @@ test('a resume carries the rules Herdr’s own resume drops', () => {
   assert.deepEqual(args.slice(0, 2), ['--resume', 'u1']);
   assert.ok(args.includes('--append-system-prompt'));
   assert.ok(args.includes('--model'));
+});
+
+// -- stalled launches -------------------------------------------------------
+// Herdr does not always drop a launch that died: a `claude` the shell could not
+// find stayed `launch_pending` forever, the board dropped its pane like any
+// shell, and every later start in that space was refused its name.
+
+test('A LAUNCH PENDING PAST THE GRACE IS STALLED, and one in progress is not', () => {
+  const ghost = paneAt('pG', '/repos/harness');
+  assert.equal(launchStalled(ghost, 0, 31_000), true);
+  // A real start is pending for ~3s; flagging it would flash a ghost row on
+  // every click of the start button.
+  assert.equal(launchStalled(ghost, 0, 3_000), false);
+  assert.equal(launchStalled(ghost, undefined, 31_000), false);
+  assert.equal(launchStalled(paneAt('pA', '/repos/harness', { agent: 'claude' }), 0, 31_000), false);
+});
+
+test('a launch handed back to the shell is told from a live agent by the LAST line', () => {
+  // The measured tail of the stalled pane, PowerShell 5.1 on Windows.
+  const dead = [
+    'Start-Process : This command cannot be run due to the error: The system cannot find the',
+    'file specified.',
+    '    + FullyQualifiedErrorId : InvalidOperationException,Microsoft.PowerShell.Commands.Start',
+    '   ProcessCommand',
+    '',
+    'PS C:\\Users\\40752\\repos\\harness>',
+    '',
+  ].join('\n');
+  assert.equal(returnedToShell(dead), true);
+  // A Claude Code box is a `❯` line, and a custom status line can end in `%` —
+  // closing the tab on either would end a running agent.
+  const rule = '─'.repeat(40);
+  assert.equal(returnedToShell(['● Done.', '', rule, '❯ ', rule].join('\n')), false);
+  assert.equal(returnedToShell([rule, '❯ ', rule, '  opus · ctx 42%'].join('\n')), false);
+  assert.equal(returnedToShell(''), false);
 });

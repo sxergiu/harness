@@ -43,6 +43,13 @@ const HEARTBEAT_MS = 3000;
 const GENERIC_TITLE = /^claude code$/i;
 
 /**
+ * How long a launch may stay pending before its pane is a stalled row. Past the
+ * 20s `launchAgent` waits, and far past the ~3.2s a real one takes, so a start
+ * in progress never flashes up as one.
+ */
+const STALLED_AFTER_MS = 30_000;
+
+/**
  * What a pane was asked to run — a model alias or an effort level — and when it
  * was asked. The pair, because the value on its own cannot be checked against
  * anything. See `switchedTo`, and `settleClaims` for what answers one.
@@ -64,6 +71,18 @@ export class Board {
    * human, and is never overwritten.
    */
   private namedAs = new Map<string, string>();
+  /**
+   * Every name Herdr holds, off the last snapshot — instruments and stalled
+   * launches included, neither of which is a row, and either of which refuses
+   * a start that reuses its name ("agent name … is already used").
+   */
+  private herdrNames = new Set<string>();
+  /**
+   * paneId → when we first saw its launch pending. Our clock, like
+   * `stateSince`: Herdr says only that it is pending, never since when, so a
+   * restart restarts the count.
+   */
+  private pendingSince = new Map<string, number>();
   private started = false;
   /**
    * workspace id → the directory its agents are started in. SEEDED ONCE from
@@ -408,10 +427,16 @@ export class Board {
    * A name Herdr will accept that no live agent already holds. Starting is
    * meant to be one click, so the name is derived rather than asked for; the
    * space label is the one thing that describes the work at that point.
+   *
+   * `forPane` is a dormant pane being resumed, whose own row is not a rival
+   * for the name it already goes by.
    */
-  nextAgentName(label: string | null): string {
+  nextAgentName(label: string | null, forPane?: string): string {
     const base = deriveName(label) ?? 'agent';
-    const taken = new Set([...this.rows.values()].map((r) => r.name));
+    // Rows as well, for the dormant ones: their names come from RECENT and
+    // Herdr does not hold them.
+    const rows = [...this.rows.values()].filter((r) => r.paneId !== forPane);
+    const taken = new Set([...this.herdrNames, ...rows.map((r) => r.name)]);
     if (!taken.has(base)) return base;
     for (let n = 2; ; n++) {
       const candidate = `${base.slice(0, 29)}-${n}`;
@@ -450,6 +475,7 @@ export class Board {
     let workspaces: WorkspaceRow[];
     let names: Map<string, string>;
     let tabLabels: Map<string, string | null>;
+    const now = Date.now();
     try {
       const snap = await this.herdr.snapshot();
       panes = snap.panes;
@@ -459,6 +485,14 @@ export class Board {
           .filter((a): a is { pane_id: string; name: string } => typeof a.name === 'string')
           .map((a) => [a.pane_id, a.name]),
       );
+      this.herdrNames = new Set(names.values());
+      const pending = new Set((snap.agents ?? []).filter((a) => a.launch_pending).map((a) => a.pane_id));
+      for (const id of this.pendingSince.keys()) {
+        if (!pending.has(id)) this.pendingSince.delete(id);
+      }
+      for (const id of pending) {
+        if (!this.pendingSince.has(id)) this.pendingSince.set(id, now);
+      }
       // Herdr recycles workspace ids exactly as it recycles pane ids, so a dir
       // kept past the space it describes would hand a brand-new space another
       // repo's root — this bug by the other door.
@@ -499,14 +533,15 @@ export class Board {
     for (const p of panes) {
       const tabLabel = tabLabels.get(p.tab_id);
       const dormant = p.agent ? null : dormantSession(p, tabLabel);
-      if (!p.agent && dormant === null) continue;
+      const stalled = dormant === null && launchStalled(p, this.pendingSince.get(p.pane_id), now);
+      if (!p.agent && dormant === null && !stalled) continue;
       // Before `syncName` below, and it has to be: that renames an agent to
       // track its terminal title, and an instrument renamed off its own name
       // can never be found again.
       if (isInstrument(names.get(p.pane_id))) continue;
 
       const prev = this.rows.get(p.pane_id);
-      const status = dormant ? 'unknown' : asStatus(p.agent_status);
+      const status = dormant || stalled ? 'unknown' : asStatus(p.agent_status);
       const sessionUuid = p.agent_session?.value ?? null;
       // `/clear` keeps the pane and starts a new session on it. The row simply
       // re-resolves, but anything forked off the OLD session is now answering
@@ -587,14 +622,15 @@ export class Board {
         shade: null,
         locked: false,
         alias: null,
-        live: dormant === null,
+        live: dormant === null && !stalled,
         dormant: dormant !== null,
+        stalled,
       };
 
       draft.push({ row, paths });
       // Nothing below applies to a pane with no agent in it: there is no status
       // to announce, no dialog to answer, and no Herdr name to keep in step.
-      if (dormant) continue;
+      if (dormant || stalled) continue;
       if (changed) this.announce(row);
       // Off every resync rather than off the transition, so a dialog already on
       // screen when the cockpit started is answered too — and a second prompt
@@ -617,7 +653,9 @@ export class Board {
     const next = new Map(draft.map((d) => [d.row.paneId, d.row]));
     for (const [paneId, old] of this.rows) {
       if (next.has(paneId)) continue;
-      this.history.remember(old);
+      // A launch that never came up has no conversation to remember, and it
+      // did not exit. One that came up after all is still in `next`.
+      if (!old.stalled) this.history.remember(old);
       // Herdr recycles pane ids, so a trace kept past the pane it describes
       // would put a fork on whatever agent inherits the id next — and equally a
       // shade, a dead agent's hold on a slot, or its model and level.
@@ -629,7 +667,7 @@ export class Board {
       this.effortSwitchedTo.delete(paneId);
       forgetChromeDialog(paneId);
       this.onSessionGone(paneId);
-      if (this.started) {
+      if (this.started && !old.stalled) {
         notify(this.herdr, {
           title: `${old.name} exited`,
           body: `${old.repo} · the pane is gone`,
@@ -731,6 +769,18 @@ export function dormantSession(p: PaneInfo, tabLabel: string | null | undefined)
   if (p.agent || !session || session.kind !== 'id' || session.agent !== 'claude') return null;
   if (tabLabel === 'aside' || tabLabel === 'usage') return null;
   return session.value;
+}
+
+/**
+ * Whether a pane is a launch that never came up: Herdr registered the agent —
+ * and with it the name — but nothing is running, and it has been pending far
+ * longer than any real start. Measured: a start whose `claude` the shell could
+ * not find stayed `launch_pending` with no kind indefinitely, the pane a bare
+ * shell under the error, and the board dropped it like any shell — so the only
+ * trace was a start refusing the name it still held.
+ */
+export function launchStalled(p: PaneInfo, pendingSince: number | undefined, now: number): boolean {
+  return !p.agent && pendingSince !== undefined && now - pendingSince >= STALLED_AFTER_MS;
 }
 
 /**

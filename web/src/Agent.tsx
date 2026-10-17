@@ -3,6 +3,7 @@ import {
   EFFORTS, MODELS,
   type AgentRow, type AsideView, type BlockedView, type EffortLevel, type ModelAlias,
 } from '@harness/shared';
+import { useSelectionCopy } from './copyOnSelect.js';
 import { DiffTab } from './Diff.js';
 import { EntryRow, Feed } from './Feed.js';
 import type { FileViewer } from './fileRef.js';
@@ -16,15 +17,13 @@ import { modelLabel, modelReading, since, useApi } from './useHarness.js';
  * `text-xs` line. The shut usage dock is built to this same number, so the two
  * bars' top borders meet as one rule across the window rather than two at
  * different heights — which is why it is exported rather than written twice.
- *
- * `locked` pins the field here, and it is the floor a drag may not go under.
  */
 export const PROMPT_ROW_H = 26;
 
 /**
- * The ceiling, in vh, for all three ways the box can grow: a drag clamps to it,
- * typing stops growing at it, and a peek stops there too. More than this and
- * the prompt is no longer a bar under the feed, it is the view.
+ * The ceiling, in vh, a field stops growing with its text at; past it the text
+ * scrolls. More than this and the prompt is no longer a bar under the feed, it
+ * is the view.
  */
 const MAX_VH = 60;
 
@@ -44,23 +43,6 @@ const SPLIT_MAX_VW = 70;
  * the slot instead of a rule two handlers have to keep remembering.
  */
 type Companion = 'fork' | 'file';
-
-/**
- * How the prompt box decides its height.
- *
- * `locked` and `free` are the two the button toggles between and the only two
- * worth remembering. `peek` is never stored: it exists only for as long as the
- * right button is held, so there is no way to be left parked in it.
- */
-type PromptMode = 'locked' | 'free' | 'peek';
-
-const MODE_KEY = 'harness.promptMode';
-
-const MODE_HINT: Record<PromptMode, { icon: string; title: string }> = {
-  locked: { icon: '⊤', title: 'Locked to one line — click to unlock, right-click and hold to peek' },
-  free: { icon: '⇕', title: 'Drag the top border to resize — click to lock, right-click and hold to peek' },
-  peek: { icon: '⊥', title: 'Opened out to fit your text, while held' },
-};
 
 /** Which command an assignment came from. One slot, so these are alternatives. */
 type AssignKind = NonNullable<AgentRow['assignment']>['kind'];
@@ -121,10 +103,14 @@ const FIELD: Record<Composing, { placeholder: string; verb: string }> = {
  * The one field /goal, /feature and /investigate all type into: a sentence long
  * enough to be worth reading back, which a one-line input hides the end of.
  *
- * Dragged by the browser's own corner grip, unlike the prompt box. These sit
- * under the header and grow DOWNWARD — the direction the native grip pulls —
- * so there is nothing here for a handle of our own to fix, and this is the same
- * call the blocked pane makes for the same reason.
+ * It grows with its text the way the prompt box does — `field-sizing:
+ * content`, the browser's own measurement — so a sentence that wraps opens a
+ * second line the moment it does, up to the same `MAX_VH` ceiling.
+ *
+ * Also dragged by the browser's own corner grip, which the prompt box is not.
+ * These sit under the header and grow DOWNWARD — the direction the native grip
+ * pulls — and this is the same call the blocked pane makes for the same reason.
+ * A drag pins the height it was dragged to.
  *
  * Enter sends and shift-Enter breaks the line, as the prompt box does; a
  * multi-line command is typed into Claude Code and submitted as one prompt.
@@ -150,7 +136,7 @@ function CommandField(
         onSubmit();
       }}
       placeholder={placeholder}
-      className="min-w-0 flex-1 resize-y rounded border border-neutral-800 bg-neutral-900 px-2 py-1 text-neutral-200"
+      className="field-sizing-content min-w-0 flex-1 resize-y rounded border border-neutral-800 bg-neutral-900 px-2 py-1 text-neutral-200"
     />
   );
 }
@@ -285,9 +271,11 @@ export const nameTone = (assignment: AgentRow['assignment']): string =>
  * agent's.
  */
 export function AgentView(
-  { agent, tick }: { agent: AgentRow; tick: number },
+  { agent, tick, copyOnSelect }: { agent: AgentRow; tick: number; copyOnSelect: boolean },
 ): React.ReactElement {
   const { post } = useApi();
+  const root = useRef<HTMLDivElement>(null);
+  const copied = useSelectionCopy(root, copyOnSelect);
   const [tab, setTab] = useState<'feed' | 'diff' | 'subagents'>('feed');
   const [prompt, setPrompt] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -320,38 +308,6 @@ export function AgentView(
   const [composeText, setComposeText] = useState('');
   /** Bumped to ask the feed to take you to your last prompt. */
   const [jump, setJump] = useState(0);
-  /**
-   * Height in px once the human has dragged for one, and null until then —
-   * while it is null the field sizes itself to what you type.
-   *
-   * One value, not two modes: a drag is the human saying how tall it should be,
-   * and from then on auto-sizing would be undoing that on every keystroke. It
-   * lasts only as long as the mode does.
-   */
-  const [dragged, setDragged] = useState<number | null>(null);
-  /**
-   * The mode is the human's, not the agent's, so it outlives both this view and
-   * the page. Only this one preference is stored, and a `max` written by a
-   * crash mid-peek would still read back as `locked`.
-   */
-  const [mode, setMode] = useState<PromptMode>(
-    () => (localStorage.getItem(MODE_KEY) === 'free' ? 'free' : 'locked'),
-  );
-  /** Right button held. Separate from `mode` so releasing restores what was. */
-  const [peeking, setPeeking] = useState(false);
-  const field = useRef<HTMLTextAreaElement>(null);
-
-  /**
-   * The mode is worth remembering; the height it was dragged to is not. So
-   * unlocking starts the box at whatever the text needs, not at a drag you have
-   * long since forgotten setting.
-   */
-  const remember = (next: PromptMode): void => {
-    setMode(next);
-    setDragged(null);
-    localStorage.setItem(MODE_KEY, next);
-  };
-
   /**
    * Opening an agent here focuses its pane in Herdr, so the terminal is always
    * showing whatever the browser is showing. This used to be a `terminal ↗`
@@ -388,39 +344,10 @@ export function AgentView(
   };
 
   /**
-   * Drags the prompt box taller by its top border: up is bigger, because up is
-   * where the box grows.
-   *
-   * Listens on the window rather than the strip so the drag survives the pointer
-   * outrunning an 8px target, and starts from the field's measured height so the
-   * first drag continues from whatever the content had grown it to instead of
-   * jumping.
-   *
-   * `pointercancel` ends it too: nothing follows one, so a drag left bound there
-   * would keep resizing the box with no button held.
-   */
-  const startResize = (e: React.PointerEvent): void => {
-    e.preventDefault();
-    const originY = e.clientY;
-    const originH = field.current?.offsetHeight ?? 0;
-    const ceiling = (window.innerHeight * MAX_VH) / 100;
-    const move = (ev: PointerEvent): void =>
-      setDragged(Math.max(PROMPT_ROW_H, Math.min(ceiling, originH + originY - ev.clientY)));
-    const stop = (): void => {
-      window.removeEventListener('pointermove', move);
-      window.removeEventListener('pointerup', stop);
-      window.removeEventListener('pointercancel', stop);
-    };
-    window.addEventListener('pointermove', move);
-    window.addEventListener('pointerup', stop);
-    window.addEventListener('pointercancel', stop);
-  };
-
-  /**
-   * The same drag as the prompt box's, turned on its side: the split is dragged
-   * by its left border, and left is where it grows. Bound to the window for the
-   * same reason — the pointer outruns an 8px target, and a cancelled press is a
-   * release that never arrives.
+   * Drags the split wider by its left border: left is where it grows. Listens on
+   * the window rather than the strip so the drag survives the pointer outrunning
+   * an 8px target, and `pointercancel` ends it too — nothing follows one, so a
+   * drag left bound there would keep resizing with no button held.
    */
   const startSplitResize = (e: React.PointerEvent): void => {
     e.preventDefault();
@@ -438,38 +365,6 @@ export function AgentView(
     window.addEventListener('pointerup', stop);
     window.addEventListener('pointercancel', stop);
   };
-
-  /**
-   * Right-press to peek at what is in the box, release to fall back to whatever
-   * mode you were in. Watched on the window because a release anywhere has to end
-   * the peek — the pointer need not still be over an 18px target after a hold, and
-   * a cancelled press is a release that never arrives.
-   */
-  const startPeek = (e: React.PointerEvent): void => {
-    if (e.button !== 2) return;
-    setPeeking(true);
-    const stop = (): void => {
-      setPeeking(false);
-      window.removeEventListener('pointerup', stop);
-      window.removeEventListener('pointercancel', stop);
-    };
-    window.addEventListener('pointerup', stop);
-    window.addEventListener('pointercancel', stop);
-  };
-
-  const shown: PromptMode = peeking ? 'peek' : mode;
-  /** What the mode alone asks for. Null hands the height back to the content. */
-  const committed = mode === 'locked' ? PROMPT_ROW_H : dragged;
-  /** Null hands the height back to the content, which `free` and a peek both do. */
-  const height = shown === 'peek' ? null : committed;
-  /**
-   * A peek is content-sized, so it opens exactly as far as the hidden text needs
-   * and no further — a whole 60vh to show a second line was the box taking over
-   * the view to say very little. It is floored at the height it opened from,
-   * because a peek that SHRANK a box you had dragged tall would be the opposite
-   * of a look at what is in it.
-   */
-  const floor = shown === 'peek' ? committed ?? PROMPT_ROW_H : undefined;
 
   /**
    * Slash commands go down the same path as any other prompt — Claude Code
@@ -513,7 +408,8 @@ export function AgentView(
   };
 
   return (
-    <div className="flex h-full flex-col text-xs">
+    <div ref={root} className="flex h-full flex-col text-xs">
+      {copied}
       <header className="flex items-center gap-2 border-b border-neutral-800 px-3 py-2">
         <StatusDot agent={agent} />
         <span className={`truncate ${nameTone(agent.assignment)}`}>{agent.name}</span>
@@ -614,6 +510,21 @@ export function AgentView(
             title="Starts claude --resume in the same pane, with the rules and model a cockpit start passes. Takes a few seconds."
           >
             resume
+          </button>
+        </div>
+      )}
+      {agent.stalled && (
+        <div className="flex items-baseline gap-2 border-b border-neutral-800 px-3 py-1.5">
+          <span className="min-w-0 flex-1 text-neutral-400">
+            not up after 30s — Herdr registered this agent and nothing reported in; it holds the name until closed. Check the pane in Herdr before closing
+          </span>
+          <button
+            disabled={busy}
+            onClick={() => void call(`/api/tabs/${agent.tabId}/close`)}
+            className="shrink-0 rounded bg-neutral-800 px-2 py-0.5 text-neutral-200 hover:bg-neutral-700 disabled:opacity-40"
+            title="Closes the tab. The pane may still say what went wrong — look in Herdr first if you want to know."
+          >
+            close
           </button>
         </div>
       )}
@@ -805,25 +716,7 @@ export function AgentView(
       )}
 
       {agent.live && (
-        <div className="relative flex items-end gap-2 border-t border-neutral-800 p-2">
-          {/*
-            The whole section resizes, dragged by its own top border — the edge
-            that moves. A textarea's native corner grip is the wrong control
-            here: it sits at the bottom right of a box already at the bottom of
-            the window, so growing the field means dragging away from the
-            direction it grows.
-
-            Present only where it does something. The pinned modes have a height
-            of their own, so a strip that took a drag there would either fight
-            them or lie.
-          */}
-          {shown === 'free' && (
-            <div
-              onPointerDown={startResize}
-              title="Drag to resize"
-              className="absolute inset-x-0 -top-1 h-2 cursor-ns-resize"
-            />
-          )}
+        <div className="flex items-end gap-2 border-t border-neutral-800 p-2">
           {/*
             Only on the feed, because it acts on the feed. On the diff or the
             subagents tab the same click would have to change tabs first, which
@@ -839,66 +732,27 @@ export function AgentView(
             </button>
           )}
           {/*
-            Unlike the jump beside it, this one is on every tab: it governs the
-            input, which is on every tab too.
-          */}
-          <button
-            onClick={() => remember(mode === 'locked' ? 'free' : 'locked')}
-            onPointerDown={startPeek}
-            onContextMenu={(e) => e.preventDefault()}
-            title={MODE_HINT[shown].title}
-            className={`px-1 py-1 hover:text-neutral-200 ${
-              shown === 'free' ? 'text-neutral-300' : 'text-neutral-500'
-            }`}
-          >
-            {MODE_HINT[shown].icon}
-          </button>
-          {/*
-            Unlocked and not yet dragged — and while a peek is held —
-            `field-sizing: content` grows the field to its text: the browser's
-            measurement, and exact, where measuring a scroll height ourselves
-            would be a copy of it that runs a frame late.
+            `field-sizing: content` sizes the field to its text, typed or pasted
+            alike: one line when it holds one, growing as it wraps, up to
+            `MAX_VH` and scrolling past it. The browser's measurement, and exact,
+            where measuring a scroll height ourselves would be a copy of it that
+            runs a frame late.
 
             Enter still sends, so a newline needs shift. Verified on a live agent
             that this is worth offering: `agent.prompt` types a multi-line text
             into Claude Code's box and submits it as ONE prompt — it does not
             split at the first newline.
-
-            Locked is one line that runs off the end, exactly like the `input`
-            this replaced: it does not wrap, and it hides the overflow rather
-            than scrolling it, because in a box one line tall the scrollbar is
-            taller than the line it scrolls. Wrapping without the scrollbar
-            would be worse than either — text simply gone below the edge. The
-            caret is still followed, so typing past the end tracks it.
           */}
           <textarea
-            ref={field}
             rows={1}
-            style={{
-              maxHeight: `${MAX_VH}vh`,
-              ...(height === null ? { minHeight: floor } : { height }),
-            }}
+            style={{ minHeight: PROMPT_ROW_H, maxHeight: `${MAX_VH}vh` }}
             value={prompt}
-            onChange={(e) => {
-              setPrompt(e.target.value);
-              // Outgrowing the one line unlocks the box, since locked from here
-              // on would be hiding what you just typed — sideways for a long
-              // line, below the edge for a second one. Asked of the element,
-              // which already holds the new value and knows the width it has to
-              // fit in. Not remembered: the mode you chose by hand is still the
-              // one the next view starts in.
-              const box = e.target;
-              if (box.scrollWidth > box.clientWidth || box.scrollHeight > box.clientHeight) {
-                setMode('free');
-              }
-            }}
+            onChange={(e) => setPrompt(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void send(); }
             }}
             placeholder="prompt this agent…  ⏎ sends, ⇧⏎ newline"
-            className={`flex-1 resize-none rounded border border-neutral-800 bg-neutral-900 px-2 py-1 text-neutral-200 ${
-              height === null ? 'field-sizing-content' : ''
-            } ${shown === 'locked' ? 'overflow-hidden whitespace-pre' : ''}`}
+            className="field-sizing-content min-w-0 flex-1 resize-none rounded border border-neutral-800 bg-neutral-900 px-2 py-1 text-neutral-200"
           />
           <button
             disabled={busy || !prompt.trim()}

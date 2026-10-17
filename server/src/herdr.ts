@@ -76,9 +76,10 @@ const PROMPT_WAIT_MS = 6_000;
 
 /**
  * A shell sitting at its prompt: zsh, bash, root, and the arrow prompts
- * starship and p10k default to. One definition, because the two readers have to
- * agree — `waitForPrompt` waits for a line like this and `lastOutput` is
- * looking for the one thing that is NOT one.
+ * starship and p10k default to. One definition, because the readers have to
+ * agree — `waitForPrompt` waits for a line like this, `returnedToShell` asks
+ * whether a launch handed the pane back to one, and `lastOutput` is looking for
+ * the one thing that is NOT one.
  */
 const SHELL_PROMPT = /[%$#>❯] *$/;
 
@@ -201,6 +202,20 @@ export function shellTail(pane: string, head: string): string[] | null {
  */
 export function paneTookText(before: string, after: string): boolean {
   return before !== after;
+}
+
+/**
+ * Whether a pane's LAST line is a shell prompt — the command typed into it ran
+ * and handed the shell back. A prompt-shaped last line is not enough on its
+ * own: a Claude Code box is a `❯` line, and a custom status line can end in
+ * `%` or `>`. What a live agent cannot leave out is the full-width `─` rule its
+ * box is drawn between, so any rule in the tail means it is not a shell.
+ */
+export function returnedToShell(pane: string): boolean {
+  const lines = pane.split('\n').filter((line) => line.trim());
+  if (lines.some((line) => line.includes('────'))) return false;
+  const last = lines.pop();
+  return last !== undefined && SHELL_PROMPT.test(last);
 }
 
 /** What the `herdr` binary printed, or null if it is not on PATH or did not answer. */
@@ -399,11 +414,17 @@ export interface WorkspaceInfo {
 export interface AgentInfo {
   pane_id: string;
   name?: string;
-  /** Only `agent.get` fills these in; the snapshot's `agents[]` carries neither. */
+  /** The agent KIND, as on `PaneInfo` — absent while nothing has come up. */
+  agent?: string;
   tab_id?: string;
   cwd?: string;
   agent_status?: string;
   agent_session?: { value: string; kind: 'id' | 'path' };
+  /**
+   * In the snapshot's `agents[]` too, measured on protocol 22, and NOT always
+   * cleared: a launch whose `claude` was never found stayed pending for good,
+   * holding its name — see `launchStalled` in `board.ts`.
+   */
   launch_pending?: boolean;
 }
 
@@ -863,7 +884,7 @@ export class Herdr {
     try {
       await this.waitForPrompt(paneId);
       await this.startAgent(name, paneId, args);
-      if (!(await this.waitForLaunch(name))) {
+      if (!(await this.waitForLaunch(name, paneId))) {
         const why = await this.lastOutput(paneId);
         throw new Error(`${name} exited as soon as it started${why ? `: ${why}` : ''}`);
       }
@@ -928,7 +949,7 @@ export class Herdr {
   async resumeIn(name: string, paneId: string, args: string[]): Promise<void> {
     await this.waitForPrompt(paneId);
     await this.startAgent(name, paneId, args);
-    if (!(await this.waitForLaunch(name))) {
+    if (!(await this.waitForLaunch(name, paneId))) {
       const why = await this.lastOutput(paneId);
       throw new Error(`${name} exited as soon as it started${why ? `: ${why}` : ''}`);
     }
@@ -1003,12 +1024,19 @@ export class Herdr {
    * a Herdr that stops answering, or a launch still pending after 20s, is a
    * slow or unreachable agent rather than a dead one, and closing the pane on
    * that guess would end an agent that is running.
+   *
+   * Except that Herdr does not always drop a launch that died. Measured: a
+   * `claude` the shell could not find left the agent `launch_pending` with no
+   * kind, indefinitely, and answering true for it returned a pane the board
+   * could not show and a name no later start could take. So a launch still
+   * pending at the deadline is dead when the pane says so too — nothing came
+   * up as an agent and the shell has its prompt back.
    */
-  private async waitForLaunch(name: string): Promise<boolean> {
+  private async waitForLaunch(name: string, paneId: string): Promise<boolean> {
     const deadline = Date.now() + LAUNCH_WAIT_MS;
+    let info: AgentInfo | null = null;
     while (Date.now() < deadline) {
       await new Promise((r) => setTimeout(r, 300));
-      let info: AgentInfo | null;
       try {
         info = await this.agentInfo(name);
       } catch {
@@ -1017,7 +1045,8 @@ export class Herdr {
       if (info === null) return false;
       if (!info.launch_pending) return true;
     }
-    return true;
+    if (info?.agent) return true;
+    return !returnedToShell(await this.read(paneId, 8).catch(() => ''));
   }
 
   /**

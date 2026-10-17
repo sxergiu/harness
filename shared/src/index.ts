@@ -257,6 +257,13 @@ export interface AgentRow {
    * into it. Never true on a RECENT row.
    */
   dormant: boolean;
+  /**
+   * Herdr registered an agent here and it never came up — still launch-pending
+   * long after any real start, nothing running, the pane a shell under whatever
+   * went wrong. It holds its name until the tab is closed, which is the one
+   * thing to do with it. `live` is false; never on a RECENT row.
+   */
+  stalled: boolean;
 }
 
 // ---------------------------------------------------------------------------

@@ -617,6 +617,21 @@ export function AgentView(
           </button>
         </div>
       )}
+      {agent.stalled && (
+        <div className="flex items-baseline gap-2 border-b border-neutral-800 px-3 py-1.5">
+          <span className="min-w-0 flex-1 text-neutral-400">
+            not up after 30s — Herdr registered this agent and nothing reported in; it holds the name until closed. Check the pane in Herdr before closing
+          </span>
+          <button
+            disabled={busy}
+            onClick={() => void call(`/api/tabs/${agent.tabId}/close`)}
+            className="shrink-0 rounded bg-neutral-800 px-2 py-0.5 text-neutral-200 hover:bg-neutral-700 disabled:opacity-40"
+            title="Closes the tab. The pane may still say what went wrong — look in Herdr first if you want to know."
+          >
+            close
+          </button>
+        </div>
+      )}
 
       {/*
         Top-aligned, unlike the prompt bar's `items-end`: this box grows DOWN

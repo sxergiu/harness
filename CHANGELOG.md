@@ -7,6 +7,7 @@ is that there is one place to change them.
 
 | Version | |
 |---|---|
+| [0.5.0](releases/0.5.0.md) | Windows: a launch that never came up holding its agent name off-screen; the prompt box sizes itself to its text; copy text selected in the agent view; the running version in settings |
 | [0.4.0](releases/0.4.0.md) | Agents allowed their tools by `harness init`; Windows: agents started without most of their rules, reaching Herdr's named pipe, the claude.cmd shim; conversations a failed restore dropped, with resume; no trust dialog when starting from a space; a log that says why the cockpit stopped; the header says what an agent is running; holding the machine default model; ▶ run on code blocks |
 | [0.3.0](releases/0.3.0.md) | A space that pinned itself to the wrong checkout; a per-agent model switch, contained; answering the Claude in Chrome dialog; per-account limits |
 | [0.2.2](releases/0.2.2.md) | Test-only — the fixture that was testing the separator instead of the hole, and the three-platform claim true again |

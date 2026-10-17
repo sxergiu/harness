@@ -818,9 +818,12 @@ app.post<{ Params: { paneId: string } }>('/api/agents/:paneId/resume', async (re
     return reply.code(409).send({ error: 'nothing to resume in this pane' });
   }
   const alias = modelDefault();
+  // Its own name unless Herdr still holds it — a resume that died before this
+  // one can leave its launch registered, pending, under exactly that name.
+  const name = board.nextAgentName(row.name, row.paneId);
   try {
     await herdr.resumeIn(
-      row.name,
+      name,
       row.paneId,
       resumeArgs(row.sessionUuid, startArgs(projects.gitDelegated(row.cwd), alias)),
     );

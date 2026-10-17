@@ -953,17 +953,17 @@ app.post<{ Params: { id: string } }>('/api/tabs/:id/close', async (req, reply) =
 // ---------------------------------------------------------------------------
 
 /**
- * Facts about this install, read straight off the disk each time. Nothing here
- * is cached or broadcast: none of it changes unless somebody changes it on this
- * screen, and it is read far too rarely to be worth keeping in step.
- */
-/**
  * Read once, at start: this is the version RUNNING. An upgrade installed under a
  * live cockpit rewrites the manifest beside it, and reading it per request would
  * report the new version from the old code.
  */
 const runningVersion = packageVersion();
 
+/**
+ * Facts about this install, read straight off the disk each time. Nothing here
+ * is cached or broadcast: none of it changes unless somebody changes it on this
+ * screen, and it is read far too rarely to be worth keeping in step.
+ */
 const settingsView = (): SettingsView => ({
   version: runningVersion,
   rules: { text: rulesText(), isDefault: rulesAreDefault() },

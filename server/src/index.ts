@@ -956,11 +956,19 @@ app.post<{ Params: { id: string } }>('/api/tabs/:id/close', async (req, reply) =
 // ---------------------------------------------------------------------------
 
 /**
+ * Read once, at start: this is the version RUNNING. An upgrade installed under a
+ * live cockpit rewrites the manifest beside it, and reading it per request would
+ * report the new version from the old code.
+ */
+const runningVersion = packageVersion();
+
+/**
  * Facts about this install, read straight off the disk each time. Nothing here
  * is cached or broadcast: none of it changes unless somebody changes it on this
  * screen, and it is read far too rarely to be worth keeping in step.
  */
 const settingsView = (): SettingsView => ({
+  version: runningVersion,
   rules: { text: rulesText(), isDefault: rulesAreDefault() },
   model: {
     alias: modelDefault(),
@@ -1269,7 +1277,7 @@ if (!claim(port)) {
 // Opened after the bind, so the file describes a cockpit that is actually up
 // and a failed start leaves the previous run's log intact to explain itself.
 logStart({
-  harness: packageVersion() ?? 'unknown',
+  harness: runningVersion ?? 'unknown',
   node: process.versions.node,
   platform: process.platform,
   port,
@@ -1292,11 +1300,12 @@ herdr.start();
 board.start();
 
 const url = urlFor(port);
+const v = runningVersion ? `v${runningVersion} ` : '';
 if (built) {
-  console.log(`[harness] ${url}`);
+  console.log(`[harness] ${v}${url}`);
   if (!values['no-open']) openBrowser(url);
 } else {
-  console.log(`[harness] api on ${url} — no build here, so run Vite for the page`);
+  console.log(`[harness] ${v}api on ${url} — no build here, so run Vite for the page`);
 }
 
 /**

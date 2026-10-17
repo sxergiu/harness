@@ -710,6 +710,12 @@ export interface PermissionsState {
 }
 
 export interface SettingsView {
+  /**
+   * The harness version this process started as, off the package manifest a
+   * release bumps — so it follows releases with nothing to keep in step. Null
+   * when no manifest above the server carries one.
+   */
+  version: string | null;
   rules: {
     text: string;
     /** False once the human has written their own — the reset has something to undo. */

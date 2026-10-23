@@ -71,7 +71,10 @@ export class Ping {
     const paneId = await this.herdr.launchAgent(
       PING_AGENT,
       { workspaceId: workspace.workspace_id, cwd, label: 'ping' },
-      [],
+      // Every ↻ spends this turn, so it goes to the cheapest model: the wake-up
+      // needs a fresh process reaching the API, not any particular one, and the
+      // machine default may be opus[1m].
+      ['--model', 'haiku'],
     );
     if (this.closed) {
       await this.herdr.closePane(paneId).catch(() => {});

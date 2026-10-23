@@ -291,7 +291,6 @@ const board = new Board(
     broadcast({ type: 'recent', recent: board.recent() });
   },
   (paneId) => { for (const [, fork] of FORKS) void fork.close(paneId).catch(() => {}); },
-  (paneId) => summaries.request(paneId),
 );
 
 /**
@@ -303,7 +302,7 @@ const usage = new Usage(herdr);
 /** A fresh agent of our own, pinged to wake agents stalled on API timeouts. */
 const ping = new Ping(herdr);
 
-/** Each conversation's running brief, rewritten after every finished turn by an agent of our own. */
+/** Each conversation's running brief, kept current by an agent of our own while its tab is open. */
 const summaries = new Summaries(herdr, board);
 
 /**
@@ -380,6 +379,9 @@ app.get<{ Params: { paneId: string } }>('/api/agents/:paneId/subagents', async (
 app.get<{ Params: { paneId: string } }>('/api/agents/:paneId/summary', async (req, reply) => {
   const row = board.row(req.params.paneId);
   if (!row) return reply.code(404).send({ error: 'no such agent' });
+  // Read on every tick the tab is open, which is the only thing that keeps a
+  // summary current — see `Summaries`.
+  summaries.follow(row.paneId);
   const view: SummaryView = summaries.view(row);
   return view;
 });

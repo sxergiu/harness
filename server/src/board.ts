@@ -184,12 +184,6 @@ export class Board {
    */
   private effortSwitchedTo = new Map<string, Claim>();
 
-  /**
-   * Each pane's `completion_seq` as last seen, so a finished turn is noticed
-   * once. In memory and dropped with the pane, like the claims above.
-   */
-  private completedAt = new Map<string, number | null>();
-
   constructor(
     private readonly herdr: Herdr,
     private readonly history: History,
@@ -204,8 +198,6 @@ export class Board {
      * session and cannot outlive it.
      */
     private readonly onSessionGone: (paneId: string) => void,
-    /** An agent on the board finished a turn. */
-    private readonly onTurnDone: (paneId: string) => void,
   ) {}
 
   /**
@@ -488,7 +480,6 @@ export class Board {
     let workspaces: WorkspaceRow[];
     let names: Map<string, string>;
     let tabLabels: Map<string, string | null>;
-    let completions: Map<string, number | null>;
     const now = Date.now();
     try {
       const snap = await this.herdr.snapshot();
@@ -500,7 +491,6 @@ export class Board {
           .map((a) => [a.pane_id, a.name]),
       );
       this.herdrNames = new Set(names.values());
-      completions = new Map((snap.agents ?? []).map((a) => [a.pane_id, a.completion_seq ?? null]));
       const pending = new Set((snap.agents ?? []).filter((a) => a.launch_pending).map((a) => a.pane_id));
       for (const id of this.pendingSince.keys()) {
         if (!pending.has(id)) this.pendingSince.delete(id);
@@ -544,8 +534,6 @@ export class Board {
 
     const used = new Set<string>();
     const draft: Array<{ row: AgentRow; paths: string[] }> = [];
-    /** Told only once `this.rows` holds this pass, which is what a listener reads. */
-    const finished: string[] = [];
 
     for (const p of panes) {
       const tabLabel = tabLabels.get(p.tab_id);
@@ -650,12 +638,6 @@ export class Board {
       // to announce, no dialog to answer, and no Herdr name to keep in step.
       if (dormant || stalled) continue;
       if (changed) this.announce(row);
-      const seq = completions.get(p.pane_id) ?? null;
-      const seen = this.completedAt.has(p.pane_id);
-      if (this.started && turnFinished(seen, this.completedAt.get(p.pane_id) ?? null, seq, prev?.status, status)) {
-        finished.push(p.pane_id);
-      }
-      if (seq !== null || !seen) this.completedAt.set(p.pane_id, seq);
       // Off every resync rather than off the transition, so a dialog already on
       // screen when the cockpit started is answered too — and a second prompt
       // arriving before the first's `working` was ever observed does not sit
@@ -690,7 +672,6 @@ export class Board {
       this.switchedTo.delete(paneId);
       this.startedBy.delete(paneId);
       this.effortSwitchedTo.delete(paneId);
-      this.completedAt.delete(paneId);
       forgetChromeDialog(paneId);
       this.onSessionGone(paneId);
       if (this.started && !old.stalled) {
@@ -710,7 +691,6 @@ export class Board {
     this.workspaces = workspaces;
     this.started = true;
     this.onChange();
-    for (const paneId of finished) this.onTurnDone(paneId);
   }
 
   /**
@@ -956,26 +936,6 @@ function place(members: AgentRow[], locks: Map<string, number>): AgentRow[] {
  */
 function isInstrument(name: string | undefined): boolean {
   return name === USAGE_AGENT || name === PING_AGENT || name === SUMMARY_AGENT || isAside(name);
-}
-
-/**
- * Whether a pane finished a turn since the last resync. `completion_seq` moves
- * once per finished turn, whether or not anyone has viewed the pane — which
- * `done` does not survive — and is not missed by a turn shorter than the
- * heartbeat. It is ABSENT until a first turn ends, so a pane first seen with
- * none fires when one arrives, while a pane first seen with one does not: that
- * turn finished before we were watching. A Herdr that never reports it falls
- * back to working-then-settled, blind to a turn between two heartbeats.
- */
-export function turnFinished(
-  seen: boolean,
-  last: number | null,
-  seq: number | null,
-  prev: AgentStatus | undefined,
-  status: AgentStatus,
-): boolean {
-  if (seq !== null) return seen && seq !== last;
-  return prev === 'working' && (status === 'idle' || status === 'done');
 }
 
 /** The one rule mapping a Herdr name onto "this pane is somebody's fork". */

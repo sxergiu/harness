@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import { aliasRuns, bashMode, sameAccount } from '@harness/shared';
 import { parse as parseAccounts, rowFor, statusOf } from './account.js';
 import { ASIDE_PREFIX, RUN_FORK, asideName } from './aside.js';
-import { dormantSession, launchStalled, seedCwd, turnFinished } from './board.js';
+import { dormantSession, launchStalled, seedCwd } from './board.js';
 import {
   HOLD_MS, decide, grantOf, holdFor, mayTrust, pinAction, settleAction, trustKey,
 } from './claudeFiles.js';
@@ -1197,19 +1197,8 @@ test('a launch handed back to the shell is told from a live agent by the LAST li
 });
 
 // -- the summary -------------------------------------------------------------
-// Each finished turn costs a haiku job, so the trigger firing on every
-// heartbeat, or the digest repeating turns, is a bill nobody sees.
-
-test('a finished turn fires ONCE, and one finished before we watched not at all', () => {
-  assert.equal(turnFinished(false, null, 7, undefined, 'idle'), false);
-  assert.equal(turnFinished(true, 7, 7, 'idle', 'idle'), false);
-  assert.equal(turnFinished(true, 7, 8, 'working', 'done'), true);
-  // Absent until a first turn ends: a new agent's first turn still counts.
-  assert.equal(turnFinished(true, null, 1, 'working', 'idle'), true);
-  // The fallback is for a Herdr with no counter, and only for it.
-  assert.equal(turnFinished(true, null, null, 'working', 'idle'), true);
-  assert.equal(turnFinished(true, 7, 7, 'working', 'idle'), false);
-});
+// Each update costs a haiku job, and the open tab asks on every tick, so a
+// digest that is not empty when nothing new was said is a bill nobody sees.
 
 test('the digest takes only what was said, from where the last one stopped', () => {
   const turns = feedTurns([

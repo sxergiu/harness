@@ -7,8 +7,9 @@ import { since, useApi } from './useHarness.js';
 
 /**
  * The conversation's running brief — discussed, decided, open — which the
- * server has a haiku agent of its own rewrite after every finished turn. The
- * view is keyed on the session, so `/clear` lands on a fresh one.
+ * server has a haiku agent of its own bring up to date while this tab is open,
+ * and only then. The view is keyed on the session, so `/clear` lands on a fresh
+ * one.
  */
 export function SummaryTab(
   { paneId, tick, viewer }: { paneId: string; tick: number; viewer?: FileViewer },
@@ -60,8 +61,8 @@ export function SummaryTab(
           ? <Markdown source={view.text} viewer={viewer} />
           : (
             <p className="text-neutral-600">
-              Written after this agent’s next finished turn, by a haiku agent of the harness’s own —
-              or now, with ↻.
+              Written while this tab is open, once this agent has finished a turn, by a haiku agent of
+              the harness’s own — or now, with ↻.
             </p>
           )}
       </div>

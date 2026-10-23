@@ -250,6 +250,14 @@ export interface AgentRow {
    * `shade`.
    */
   locked: boolean;
+  /**
+   * Herdr still holds this agent's launch pending, and refuses `agent.prompt`
+   * until it clears — measured ~3.7s after the start, with the row on the board
+   * from ~0.3s and its session id arriving at ~1.4s. The prompt box is locked
+   * meanwhile, since a send there fails. Applied in `agents()`, like `shade`, so
+   * it never reaches a remembered row.
+   */
+  launching: boolean;
   /** False once the pane is gone: the row moved to RECENT. */
   live: boolean;
   /**

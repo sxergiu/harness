@@ -256,9 +256,11 @@ export class Board {
       // whichever of them said it, so a second field would only give the browser
       // something to disagree with itself about.
       const effort = this.effortFor(row.paneId) ?? row.effort;
-      return shade === null && !locked && alias === null && effort === row.effort
+      // `live` excludes a stalled launch, which is pending for good.
+      const launching = row.live && this.pendingSince.has(row.paneId);
+      return shade === null && !locked && alias === null && effort === row.effort && !launching
         ? row
-        : { ...row, shade, locked, alias, effort };
+        : { ...row, shade, locked, alias, effort, launching };
     });
   }
 
@@ -618,11 +620,12 @@ export class Board {
         fileCount: paths.length,
         contendedWith: [],
         aside: fork ?? (this.forked.has(p.pane_id) ? 'cleared' : null),
-        // Never set here: `agents()` is the author, so none of the three can
-        // ride a remembered row onto disk against a pane id Herdr recycles.
+        // Never set here: `agents()` is the author, so none of these can ride a
+        // remembered row onto disk against a pane id Herdr recycles.
         shade: null,
         locked: false,
         alias: null,
+        launching: false,
         live: dormant === null && !stalled,
         dormant: dormant !== null,
         stalled,

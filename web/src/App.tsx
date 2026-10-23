@@ -3,10 +3,10 @@ import {
   AGENT_SHADES, type AccountKey, type AccountView, type AgentRow, type AgentShade,
   type KnownAccount, sameAccount, type UsageView, type WorkspaceRow,
 } from '@harness/shared';
-import { ASSIGN, AgentView, PROMPT_ROW_H, nameTone } from './Agent.js';
+import { ASSIGN, AgentView, PROMPT_ROW_H, StartingView, nameTone, pruneDrafts } from './Agent.js';
 import { useCopyOnSelect } from './copyOnSelect.js';
 import { Settings } from './Settings.js';
-import { ContextMeter, ForkRing, StatusDot, Working } from './Status.js';
+import { ContextMeter, ForkRing, Spinner, StatusDot, Working } from './Status.js';
 import { useTheme } from './theme.js';
 import { since, useApi, useHarness, wantsAttention } from './useHarness.js';
 
@@ -36,6 +36,8 @@ export function App(): React.ReactElement {
   /** Quitting closes the only window onto the agents, so it asks first. */
   const [confirmQuit, setConfirmQuit] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  /** The space an agent is being started in, until the start returns. */
+  const [starting, setStarting] = useState<string | null>(null);
 
   // Elapsed times are relative, so the board has to re-render on its own.
   const [, setClock] = useState(0);
@@ -79,9 +81,25 @@ export function App(): React.ReactElement {
   const select = (paneId: string): void => {
     setSelected(paneId);
     setSettingsOpen(false);
+    setStarting(null);
+  };
+
+  // Ending clears only its own placeholder, so one space's start finishing does
+  // not uncover another's still in flight.
+  const start = (where: string, on: boolean): void => {
+    setStarting((cur) => (on ? where : cur === where ? null : cur));
+    if (on) setSettingsOpen(false);
   };
 
   const offline = !state.connected || !state.herdrConnected;
+
+  // Only off a board that is whole: before `hello`, or with Herdr down, the row
+  // list is empty or stale and would prune every draft there is. Never off an
+  // EMPTY one either — a restarted server says hello with no rows, and Herdr
+  // connected, until its first resync lands.
+  useEffect(() => {
+    if (!offline && state.agents.length > 0) pruneDrafts(new Set(state.agents.map((a) => a.paneId)));
+  }, [offline, state.agents]);
 
   return (
     <div className="flex h-screen flex-col">
@@ -205,6 +223,7 @@ export function App(): React.ReactElement {
                 onToggle={() => toggle(g.id)}
                 selected={selected}
                 onSelect={select}
+                onStarting={start}
               />
             ))}
 
@@ -261,6 +280,8 @@ export function App(): React.ReactElement {
           */}
           {settingsOpen ? (
             <Settings onClose={() => setSettingsOpen(false)} />
+          ) : starting !== null ? (
+            <StartingView where={starting} />
           ) : current ? (
             // Keyed on the session too: /clear keeps the pane but starts a new
             // transcript, and turn indices restart, so the view must remount.
@@ -269,6 +290,7 @@ export function App(): React.ReactElement {
               agent={current}
               tick={state.tick}
               copyOnSelect={copyOnSelect.on}
+              offline={offline}
             />
           ) : (
             <div className="p-6 text-xs text-neutral-600">Select an agent.</div>
@@ -806,17 +828,20 @@ function shortPath(p: string): string {
 // ---------------------------------------------------------------------------
 
 function Space(
-  { group, open, onToggle, selected, onSelect }: {
+  { group, open, onToggle, selected, onSelect, onStarting }: {
     group: SpaceGroup;
     open: boolean;
     onToggle: () => void;
     selected: string | null;
     onSelect: (paneId: string) => void;
+    /** The space's name, as a start begins (`on`) and as it ends. */
+    onStarting: (where: string, on: boolean) => void;
   },
 ): React.ReactElement {
   const { post } = useApi();
   const [editing, setEditing] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [adding, setAdding] = useState(false);
   const [error, setError] = useState<string | null>(null);
   /** Only ever set for a space that still has agents — see `close`. */
   const [confirming, setConfirming] = useState(false);
@@ -833,8 +858,10 @@ function Space(
 
   /** One click, no form: the space already knows where and what to call it. */
   const add = async (): Promise<void> => {
-    setBusy(true);
+    if (adding) return;
+    setAdding(true);
     setError(null);
+    onStarting(group.label, true);
     try {
       const { paneId } = await post<{ paneId: string }>(`/api/workspaces/${group.id}/agents`);
       onSelect(paneId);
@@ -843,7 +870,8 @@ function Space(
       setError((e as Error).message);
       setEditing(true);
     } finally {
-      setBusy(false);
+      setAdding(false);
+      onStarting(group.label, false);
     }
   };
 
@@ -997,10 +1025,13 @@ function Space(
               }}
             />
           )}
+          {/* Outside the hover strip too: a start takes ~4s, and it must not
+              stop saying so the moment the pointer leaves the header. */}
+          {adding && <Spinner />}
           {group.editable && (
             <div className="flex shrink-0 gap-0.5 opacity-0 group-hover/space:opacity-100">
               <IconButton label="✎" title="Rename this space, or change its directory" onClick={() => setEditing(true)} />
-              <IconButton label={busy ? '·' : '+'} title="Start an agent here" onClick={() => void add()} />
+              <IconButton label="+" title="Start an agent here" onClick={() => void add()} />
               <IconButton
                 label="✕"
                 title={group.agents.length > 0 ? 'Close this space — it has agents in it' : 'Close this space'}
@@ -1318,6 +1349,9 @@ function BoardRow(
         {/* An error outranks everything else the row could say about now. */}
         {agent.error && (
           <div className="truncate pl-6 text-red-400" title={agent.error}>⚠ {agent.error}</div>
+        )}
+        {agent.launching && (
+          <div className="truncate pl-6"><Spinner label="starting…" /></div>
         )}
         {agent.dormant && (
           <div className="truncate pl-6 text-neutral-500">not running — open to resume</div>

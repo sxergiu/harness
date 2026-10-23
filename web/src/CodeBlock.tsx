@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { bashMode, type FeedEntry } from '@harness/shared';
 import { highlight } from './highlight.js';
+import { Linkified } from './links.js';
 import { Spinner } from './Status.js';
 
 type ShellRun = Extract<FeedEntry, { kind: 'shell' }>;
@@ -232,7 +233,7 @@ function Stream({ text, error }: { text: string; error?: boolean }): React.React
         error ? 'text-red-400' : 'text-neutral-400'
       }`}
     >
-      {text}
+      <Linkified text={text} />
     </pre>
   );
 }

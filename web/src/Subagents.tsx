@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import type { FeedEntry, SubagentRow, SubagentsView } from '@harness/shared';
 import { EntryRow } from './Feed.js';
 import type { FileViewer } from './fileRef.js';
+import { Linkified } from './links.js';
 import { Spinner, SubagentDot, subagentText } from './Status.js';
 import { useApi } from './useHarness.js';
 
@@ -187,7 +188,7 @@ function Detail(
         <div className="my-2 rounded border border-neutral-800 bg-neutral-900/50 p-2">
           <div className="mb-1 text-neutral-500">returned to the parent</div>
           <pre className="max-h-80 overflow-auto whitespace-pre-wrap text-neutral-400">
-            {row.output}
+            <Linkified text={row.output} />
           </pre>
         </div>
       )}

@@ -35,6 +35,7 @@ import { Shades } from './shades.js';
 import {
   modelDefault, resumeArgs, rulesAreDefault, rulesText, setModelDefault, setRules, startArgs,
 } from './rules.js';
+import { Ping } from './ping.js';
 import { Transcripts, feedTurns, subagentPathFor, subagentRows } from './transcript.js';
 import { Usage } from './usage.js';
 
@@ -294,6 +295,9 @@ const board = new Board(
  * give up a turn to answer a question that was never about it.
  */
 const usage = new Usage(herdr);
+
+/** A fresh agent of our own, pinged to wake agents stalled on API timeouts. */
+const ping = new Ping(herdr);
 
 /**
  * Which account those limits belong to, and the way to a different one when it
@@ -630,6 +634,14 @@ app.post('/api/refresh', async () => {
   board.schedule();
   return { ok: true };
 });
+
+/**
+ * Wakes agents stalled on API timeouts by pinging a fresh agent — see
+ * `ping.ts`. The browser's `↻` sends this after `/api/refresh` rather than the
+ * refresh doing it: that route is also how a probe hands the event stream back
+ * (invariant 2), and it must stay instant and free rather than start a session.
+ */
+app.post('/api/ping', async (_req, reply) => act(reply, () => ping.send()));
 
 /**
  * Ends the cockpit, not the agents — they are Herdr's, and they keep running.
@@ -1340,11 +1352,11 @@ let shuttingDown = false;
  * SIGTERM) or the ⏻ in the page. Agents are Herdr's and keep running; what ends
  * here is the cockpit watching them.
  *
- * The usage agent is the one pane here that is purely ours — no conversation,
- * no work, nothing a human would go back to — so it closes with the cockpit
- * rather than outliving it. Asides and run forks deliberately do not: each holds
- * an exchange the human opened, and one is found again by name when the harness
- * comes back.
+ * The usage agent and an in-flight ping are the panes here that are purely
+ * ours — no conversation, no work, nothing a human would go back to — so they
+ * close with the cockpit rather than outliving it. Asides and run forks
+ * deliberately do not: each holds an exchange the human opened, and one is found
+ * again by name when the harness comes back.
  * A pending login pane is aside-shaped for the same reason and is likewise left
  * alone: it may be half-finished in the browser, and closing it would leave
  * somebody logged out of everything with the way back gone.
@@ -1355,7 +1367,9 @@ function shutdown(cause: string): void {
   log(`shutting down on ${cause}`);
   release();
   void Promise.race([
-    usage.close().catch(() => {}),
+    Promise.all([
+      usage.close().catch(() => {}), ping.close().catch(() => {}),
+    ]),
     new Promise((r) => setTimeout(r, CLEANUP_MS)),
   ]).then(() => {
     herdr.stop();

@@ -9,6 +9,7 @@ import { touchedPaths } from './diff.js';
 import { asStatus, type Herdr, type PaneInfo } from './herdr.js';
 import type { History } from './history.js';
 import { notify } from './notify.js';
+import { PING_AGENT } from './ping.js';
 import type { Projects } from './projects.js';
 import type { Shades } from './shades.js';
 import {
@@ -772,7 +773,10 @@ export class Board {
 export function dormantSession(p: PaneInfo, tabLabel: string | null | undefined): string | null {
   const session = p.agent_session;
   if (p.agent || !session || session.kind !== 'id' || session.agent !== 'claude') return null;
-  if (tabLabel === ASIDE_FORK.label || tabLabel === RUN_FORK.label || tabLabel === 'usage') return null;
+  if (
+    tabLabel === ASIDE_FORK.label || tabLabel === RUN_FORK.label
+    || tabLabel === 'usage' || tabLabel === 'ping'
+  ) return null;
   return session.value;
 }
 
@@ -916,8 +920,8 @@ function place(members: AgentRow[], locks: Map<string, number>): AgentRow[] {
  * no work and no changelist, and an aside additionally carries a copy of its
  * parent's `toolUseResult` entries, which on the board would read as the aside
  * having done the parent's work (invariant 10). They are still real panes in
- * Herdr, labelled `usage`, `aside` and `aside-run`, so they remain findable
- * there.
+ * Herdr, labelled `usage`, `ping`, `aside` and `aside-run`, so they remain
+ * findable there.
  *
  * An aside gets no row of its own, which is the whole of what invariants 10 and
  * 18 ask for. Its STATUS is a dot on its parent's row — see `forkStatuses`. The
@@ -930,7 +934,7 @@ function place(members: AgentRow[], locks: Map<string, number>): AgentRow[] {
  * reason asides are named after their parent's pane.
  */
 function isInstrument(name: string | undefined): boolean {
-  return name === USAGE_AGENT || isAside(name);
+  return name === USAGE_AGENT || name === PING_AGENT || isAside(name);
 }
 
 /** The one rule mapping a Herdr name onto "this pane is somebody's fork". */

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import type { FeedEntry, FeedPage, FeedTurn, ShellTail } from '@harness/shared';
 import { CodeBlock, ShellOutput, type ShellRunner } from './CodeBlock.js';
 import type { FileViewer } from './fileRef.js';
+import { Linkified } from './links.js';
 import { Markdown } from './Markdown.js';
 import { Spinner } from './Status.js';
 import { useApi } from './useHarness.js';
@@ -296,7 +297,7 @@ export function EntryRow(
   if (entry.kind === 'user') {
     return (
       <div className="my-3 border-l-2 border-neutral-600 pl-2 whitespace-pre-wrap text-neutral-300">
-        {entry.text}
+        <Linkified text={entry.text} />
       </div>
     );
   }
@@ -346,7 +347,7 @@ export function EntryRow(
     return (
       <div className="my-2 flex items-start gap-2 rounded border border-red-900/60 bg-red-950/30 px-2 py-1 text-red-300">
         <span className="shrink-0">⚠</span>
-        <span className="min-w-0 whitespace-pre-wrap">{entry.text}</span>
+        <span className="min-w-0 whitespace-pre-wrap"><Linkified text={entry.text} /></span>
       </div>
     );
   }
@@ -413,7 +414,7 @@ export function EntryRow(
     >
       {entry.sql !== null && <CodeBlock code={entry.sql} language="sql" />}
       <pre className="max-h-80 overflow-auto whitespace-pre-wrap text-neutral-500">
-        {entry.detail ?? '(no output recorded)'}
+        <Linkified text={entry.detail ?? '(no output recorded)'} />
       </pre>
     </Collapsible>
   );

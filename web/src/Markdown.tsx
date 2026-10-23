@@ -1,5 +1,6 @@
 import { CodeBlock, type ShellRunner } from './CodeBlock.js';
 import { fileRef, type FileViewer } from './fileRef.js';
+import { ExternalLink, Linkified, urlOf } from './links.js';
 
 /**
  * Deliberately tiny markdown renderer — enough to make SPEC.md readable when
@@ -106,18 +107,31 @@ export function Markdown(
   return <div>{blocks}</div>;
 }
 
-/** `code`, **bold**, and bare text. A code span naming a file opens it. */
+/**
+ * `code`, **bold**, [links](url), and bare text. A code span naming a file opens
+ * it; one holding only a URL, and any URL in the bare text, opens a tab.
+ */
 function inline(text: string, viewer?: FileViewer): React.ReactNode[] {
   const out: React.ReactNode[] = [];
-  const pattern = /(`[^`]+`|\*\*[^*]+\*\*)/g;
+  // One level of parens inside the href, so `wiki/Foo_(bar)` survives whole.
+  const pattern = /(`[^`]+`|\*\*[^*]+\*\*|\[[^\]]+\]\(https?:\/\/(?:[^\s()]|\([^\s()]*\))+\))/g;
   let last = 0;
   let m: RegExpExecArray | null;
   while ((m = pattern.exec(text)) !== null) {
-    if (m.index > last) out.push(text.slice(last, m.index));
+    if (m.index > last) out.push(<Linkified key={out.length} text={text.slice(last, m.index)} />);
     const token = m[0];
-    if (token.startsWith('`')) {
+    if (token.startsWith('[')) {
+      // The label is not recursed: a URL in it would nest one link in another.
+      const split = token.indexOf('](');
+      out.push(
+        <ExternalLink key={out.length} href={token.slice(split + 2, -1)}>
+          {token.slice(1, split)}
+        </ExternalLink>,
+      );
+    } else if (token.startsWith('`')) {
       const body = token.slice(1, -1);
-      const ref = viewer ? fileRef(body, viewer.cwd) : null;
+      const url = urlOf(body);
+      const ref = !url && viewer ? fileRef(body, viewer.cwd) : null;
       // A dotted underline rather than a colour of its own: the span is already
       // amber, and the amber band means something here (warnings, contention).
       // A `button` is valid inside the `p`, `li` and heading `div` above it.
@@ -132,6 +146,16 @@ function inline(text: string, viewer?: FileViewer): React.ReactNode[] {
             >
               {body}
             </button>
+          )
+          : url
+          ? (
+            <ExternalLink
+              key={out.length}
+              href={url}
+              className="rounded bg-neutral-800 px-1 py-0.5 text-[12px] text-amber-200 hover:text-amber-100"
+            >
+              {body}
+            </ExternalLink>
           )
           : (
             <code key={out.length} className="rounded bg-neutral-800 px-1 py-0.5 text-[12px] text-amber-200">
@@ -153,6 +177,6 @@ function inline(text: string, viewer?: FileViewer): React.ReactNode[] {
     }
     last = m.index + token.length;
   }
-  if (last < text.length) out.push(text.slice(last));
+  if (last < text.length) out.push(<Linkified key={out.length} text={text.slice(last)} />);
   return out;
 }

@@ -113,5 +113,5 @@ export function parse(text: string): AgentRow[] {
       typeof r === 'object' && r !== null
       && typeof (r as AgentRow).paneId === 'string'
       && typeof (r as AgentRow).name === 'string')
-    .map((r) => ({ ...r, model: r.model ?? null, effort: r.effort ?? null, alias: null, dormant: false, stalled: false }));
+    .map((r) => ({ ...r, model: r.model ?? null, effort: r.effort ?? null, alias: null, launching: false, dormant: false, stalled: false }));
 }

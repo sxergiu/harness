@@ -44,6 +44,80 @@ const SPLIT_MAX_VW = 70;
  */
 type Companion = 'fork' | 'file';
 
+/**
+ * Unsent prompts by pane, kept outside the view because the view remounts
+ * whenever the session id changes — on `/clear`, and on every fresh launch,
+ * whose row is on the board ~1.1s before its session id is. A draft held in the
+ * view's own state went with the old mount.
+ *
+ * In `sessionStorage` rather than memory, so a reload keeps them too — and a dev
+ * cockpit reloads itself whenever an agent edits a module this one exports
+ * from. Guarded like the theme: storage that throws costs a draft its survival,
+ * never the typing.
+ */
+const DRAFT_KEY = 'harness.draft.';
+const drafts = {
+  get(paneId: string): string | undefined {
+    try {
+      return sessionStorage.getItem(DRAFT_KEY + paneId) ?? undefined;
+    } catch {
+      return undefined;
+    }
+  },
+  set(paneId: string, text: string): void {
+    try {
+      sessionStorage.setItem(DRAFT_KEY + paneId, text);
+    } catch { /* the draft lives in the box until the next remount */ }
+  },
+  delete(paneId: string): void {
+    try {
+      sessionStorage.removeItem(DRAFT_KEY + paneId);
+    } catch { /* nothing to drop */ }
+  },
+};
+
+/**
+ * Drops every draft whose pane has left the board. Herdr recycles pane ids, so
+ * a draft kept past its pane would turn up in the box of whichever agent
+ * inherits the id — and until then it sits where no box can show it.
+ */
+export function pruneDrafts(onBoard: ReadonlySet<string>): void {
+  try {
+    for (const key of Object.keys(sessionStorage)) {
+      const paneId = key.slice(DRAFT_KEY.length);
+      if (key.startsWith(DRAFT_KEY) && !onBoard.has(paneId)) drafts.delete(paneId);
+    }
+  } catch { /* unreadable storage holds nothing to prune */ }
+}
+
+const STARTING_HINT = 'the agent is starting — the box unlocks when it can take a prompt';
+
+/**
+ * The agent pane from the click on a space's `+` until the start returns, ~4s.
+ * Without it the previous agent stays on screen, so text typed in that wait
+ * goes into the box of an agent it was never meant for. The locked box is here
+ * so the lock is visible where the typing would have gone.
+ */
+export function StartingView({ where }: { where: string }): React.ReactElement {
+  return (
+    <div className="flex h-full flex-col text-xs">
+      <header className="flex items-center gap-2 border-b border-neutral-800 px-3 py-2">
+        <Spinner label={`starting an agent in ${where}…`} />
+      </header>
+      <div className="flex-1" />
+      <div className="flex items-end gap-2 border-t border-neutral-800 p-2">
+        <textarea
+          readOnly
+          rows={1}
+          style={{ minHeight: PROMPT_ROW_H }}
+          placeholder={STARTING_HINT}
+          className="min-w-0 flex-1 resize-none rounded border border-neutral-800 bg-neutral-900 px-2 py-1 text-neutral-500"
+        />
+      </div>
+    </div>
+  );
+}
+
 /** Which command an assignment came from. One slot, so these are alternatives. */
 type AssignKind = NonNullable<AgentRow['assignment']>['kind'];
 
@@ -116,11 +190,12 @@ const FIELD: Record<Composing, { placeholder: string; verb: string }> = {
  * multi-line command is typed into Claude Code and submitted as one prompt.
  */
 function CommandField(
-  { value, onChange, onSubmit, placeholder }: {
+  { value, onChange, onSubmit, placeholder, readOnly }: {
     value: string;
     onChange: (v: string) => void;
     onSubmit: () => void;
     placeholder: string;
+    readOnly: boolean;
   },
 ): React.ReactElement {
   return (
@@ -128,6 +203,7 @@ function CommandField(
       autoFocus
       rows={1}
       style={{ minHeight: PROMPT_ROW_H, maxHeight: `${MAX_VH}vh` }}
+      readOnly={readOnly}
       value={value}
       onChange={(e) => onChange(e.target.value)}
       onKeyDown={(e) => {
@@ -271,15 +347,39 @@ export const nameTone = (assignment: AgentRow['assignment']): string =>
  * agent's.
  */
 export function AgentView(
-  { agent, tick, copyOnSelect }: { agent: AgentRow; tick: number; copyOnSelect: boolean },
+  { agent, tick, copyOnSelect, offline }: {
+    agent: AgentRow;
+    tick: number;
+    copyOnSelect: boolean;
+    /** The cockpit's socket or Herdr is down, so every action would fail. */
+    offline: boolean;
+  },
 ): React.ReactElement {
   const { post } = useApi();
   const root = useRef<HTMLDivElement>(null);
   const copied = useSelectionCopy(root, copyOnSelect);
   const [tab, setTab] = useState<'feed' | 'diff' | 'subagents'>('feed');
-  const [prompt, setPrompt] = useState('');
+  const [prompt, setPromptState] = useState(() => drafts.get(agent.paneId) ?? '');
+  const setPrompt = (text: string): void => {
+    setPromptState(text);
+    if (text) drafts.set(agent.paneId, text);
+    else drafts.delete(agent.paneId);
+  };
   const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  /** What the action in flight is doing, in words — the spinner's label. */
+  const [busy, setBusy] = useState<string | null>(null);
+  /**
+   * Why the prompt box will not take text right now, or null when it will.
+   * Read-only rather than disabled, so the caret stays put and typing carries
+   * on the moment it clears.
+   */
+  const lock = offline ? 'reconnecting…' : agent.launching ? 'agent starting…' : busy;
+  /**
+   * Why a send would be refused while typing is still fine. Measured: Herdr
+   * answers a prompt at a blocked agent `agent_blocked` and leaves the dialog
+   * untouched, so the draft can simply wait for the answer.
+   */
+  const held = agent.status === 'blocked' ? 'answer the prompt above first' : null;
   /** /clear destroys a conversation, so it does not fire on one click. */
   const [confirmClear, setConfirmClear] = useState(false);
   /**
@@ -324,23 +424,30 @@ export function AgentView(
     void post(`/api/agents/${agent.paneId}/focus`).catch(() => {});
   }, [post, agent.paneId, agent.live]);
 
-  const call = async (path: string, body?: unknown): Promise<void> => {
-    setBusy(true);
+  /** Resolves whether the action went, so a caller can keep what it would send. */
+  const call = async (label: string, path: string, body?: unknown): Promise<boolean> => {
+    setBusy(label);
     setError(null);
     try {
       await post(path, body);
+      return true;
     } catch (e) {
       setError((e as Error).message);
+      return false;
     } finally {
-      setBusy(false);
+      setBusy(null);
     }
   };
 
+  // Cleared only once it went, so a refused send keeps the text. The stored
+  // draft goes at once, though: a `/clear` remounts this view before the send
+  // resolves, and the new mount would otherwise come up holding it, unlocked.
   const send = async (): Promise<void> => {
     const text = prompt.trim();
-    if (!text) return;
-    setPrompt('');
-    await call(`/api/agents/${agent.paneId}/prompt`, { text });
+    if (!text || lock || held) return;
+    drafts.delete(agent.paneId);
+    if (await call('sending…', `/api/agents/${agent.paneId}/prompt`, { text })) setPrompt('');
+    else drafts.set(agent.paneId, prompt);
   };
 
   /**
@@ -371,7 +478,8 @@ export function AgentView(
    * interprets the leading "/" itself, so nothing here needs to know what they
    * mean. Verified for /clear, /goal and /exit.
    */
-  const command = (text: string): Promise<void> => call(`/api/agents/${agent.paneId}/prompt`, { text });
+  const command = async (text: string): Promise<boolean> =>
+    !lock && call(`${text.split(' ')[0]}…`, `/api/agents/${agent.paneId}/prompt`, { text });
 
   /**
    * Opens the box on one command, or shuts it if that one already had it —
@@ -401,10 +509,11 @@ export function AgentView(
   /** Sends whichever command opened the box, and shuts it. */
   const compose = async (): Promise<void> => {
     const text = composeText.trim();
-    if (!composing || !text) return;
-    setComposeText('');
-    setComposing(null);
-    await command(`/${composing} ${text}`);
+    if (!composing || !text || lock) return;
+    if (await command(`/${composing} ${text}`)) {
+      setComposeText('');
+      setComposing(null);
+    }
   };
 
   return (
@@ -420,10 +529,11 @@ export function AgentView(
         <ContextMeter context={agent.context} tokens />
         <ModelPicker
           agent={agent}
-          onPick={(alias) => void call(`/api/agents/${agent.paneId}/model`, { alias })}
-          onEffort={(level) => void call(`/api/agents/${agent.paneId}/effort`, { level })}
+          onPick={(alias) => void call('switching model…', `/api/agents/${agent.paneId}/model`, { alias })}
+          onEffort={(level) => void call('setting effort…', `/api/agents/${agent.paneId}/effort`, { level })}
         />
-        {busy && <Spinner />}
+        {/* A live agent's prompt bar says this already, where the box it locks is. */}
+        {busy && !agent.live && <Spinner label={busy} />}
 
         <div className="ml-auto flex gap-2">
           {agent.live && (
@@ -459,7 +569,7 @@ export function AgentView(
                 goal
               </button>
               <button
-                onClick={() => void call(`/api/agents/${agent.paneId}/interrupt`)}
+                onClick={() => void call('interrupting…', `/api/agents/${agent.paneId}/interrupt`)}
                 className="text-neutral-400 hover:text-neutral-200"
               >
                 stop
@@ -504,8 +614,8 @@ export function AgentView(
             not running — Herdr could not resume this conversation when it restored the pane
           </span>
           <button
-            disabled={busy}
-            onClick={() => void call(`/api/agents/${agent.paneId}/resume`)}
+            disabled={busy !== null}
+            onClick={() => void call('resuming…', `/api/agents/${agent.paneId}/resume`)}
             className="shrink-0 rounded bg-neutral-800 px-2 py-0.5 text-neutral-200 hover:bg-neutral-700 disabled:opacity-40"
             title="Starts claude --resume in the same pane, with the rules and model a cockpit start passes. Takes a few seconds."
           >
@@ -519,8 +629,8 @@ export function AgentView(
             not up after 30s — Herdr registered this agent and nothing reported in; it holds the name until closed. Check the pane in Herdr before closing
           </span>
           <button
-            disabled={busy}
-            onClick={() => void call(`/api/tabs/${agent.tabId}/close`)}
+            disabled={busy !== null}
+            onClick={() => void call('closing…', `/api/tabs/${agent.tabId}/close`)}
             className="shrink-0 rounded bg-neutral-800 px-2 py-0.5 text-neutral-200 hover:bg-neutral-700 disabled:opacity-40"
             title="Closes the tab. The pane may still say what went wrong — look in Herdr first if you want to know."
           >
@@ -541,9 +651,10 @@ export function AgentView(
             onChange={setComposeText}
             onSubmit={() => void compose()}
             placeholder={FIELD[composing].placeholder}
+            readOnly={lock !== null}
           />
           <button
-            disabled={!composeText.trim()}
+            disabled={!composeText.trim() || lock !== null}
             onClick={() => void compose()}
             className="rounded bg-neutral-800 px-2 py-1 text-neutral-200 disabled:opacity-40"
           >
@@ -554,8 +665,9 @@ export function AgentView(
               other or by /clear. */}
           {composing === 'goal' && agent.goal && (
             <button
+              disabled={lock !== null}
               onClick={() => { void command('/goal clear'); setComposing(null); }}
-              className="px-2 py-1 text-neutral-400 hover:text-neutral-200"
+              className="px-2 py-1 text-neutral-400 hover:text-neutral-200 disabled:opacity-40"
             >
               clear goal
             </button>
@@ -607,9 +719,12 @@ export function AgentView(
           <span className="text-amber-200">
             Discard this conversation and start fresh? Any active goal is dropped too.
           </span>
+          {/* Disabled rather than refused inside `command`: the strip shuts on
+              the click, so a refusal there would read as a /clear that went. */}
           <button
+            disabled={lock !== null}
             onClick={() => { void command('/clear'); setConfirmClear(false); }}
-            className="ml-auto rounded border border-amber-700/60 px-2 py-0.5 text-amber-200 hover:bg-amber-900/40"
+            className="ml-auto rounded border border-amber-700/60 px-2 py-0.5 text-amber-200 hover:bg-amber-900/40 disabled:opacity-40"
           >
             /clear
           </button>
@@ -746,21 +861,30 @@ export function AgentView(
           <textarea
             rows={1}
             style={{ minHeight: PROMPT_ROW_H, maxHeight: `${MAX_VH}vh` }}
+            readOnly={lock !== null}
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void send(); }
             }}
-            placeholder="prompt this agent…  ⏎ sends, ⇧⏎ newline"
-            className="field-sizing-content min-w-0 flex-1 resize-none rounded border border-neutral-800 bg-neutral-900 px-2 py-1 text-neutral-200"
+            placeholder={agent.launching ? STARTING_HINT : 'prompt this agent…  ⏎ sends, ⇧⏎ newline'}
+            className={`field-sizing-content min-w-0 flex-1 resize-none rounded border border-neutral-800 bg-neutral-900 px-2 py-1 ${
+              lock ? 'text-neutral-500' : 'text-neutral-200'
+            }`}
           />
-          <button
-            disabled={busy || !prompt.trim()}
-            onClick={() => void send()}
-            className="rounded bg-neutral-800 px-2 py-1 text-neutral-200 disabled:opacity-40"
-          >
-            {busy ? 'sending…' : 'send'}
-          </button>
+          {lock ? (
+            <span className="shrink-0 py-1"><Spinner label={lock} /></span>
+          ) : held ? (
+            <span className="shrink-0 py-1 text-neutral-500">{held}</span>
+          ) : (
+            <button
+              disabled={!prompt.trim()}
+              onClick={() => void send()}
+              className="rounded bg-neutral-800 px-2 py-1 text-neutral-200 disabled:opacity-40"
+            >
+              send
+            </button>
+          )}
         </div>
       )}
 

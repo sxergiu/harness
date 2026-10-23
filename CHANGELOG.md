@@ -7,6 +7,7 @@ is that there is one place to change them.
 
 | Version | |
 |---|---|
+| [0.6.0](releases/0.6.0.md) | ↻ wakes agents stalled on API timeouts; ▶ runs go to a run fork; Enter no longer declines an AskUserQuestion; a conversation summary tab; the system folder picker; updating from settings; bare file references; links; a locked prompt box while starting; shades across restarts |
 | [0.5.0](releases/0.5.0.md) | Windows: a launch that never came up holding its agent name off-screen; the prompt box sizes itself to its text; copy text selected in the agent view; the running version in settings |
 | [0.4.0](releases/0.4.0.md) | Agents allowed their tools by `harness init`; Windows: agents started without most of their rules, reaching Herdr's named pipe, the claude.cmd shim; conversations a failed restore dropped, with resume; no trust dialog when starting from a space; a log that says why the cockpit stopped; the header says what an agent is running; holding the machine default model; ▶ run on code blocks |
 | [0.3.0](releases/0.3.0.md) | A space that pinned itself to the wrong checkout; a per-agent model switch, contained; answering the Claude in Chrome dialog; per-account limits |

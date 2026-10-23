@@ -574,7 +574,8 @@ app.post<{ Params: { paneId: string } }>('/api/agents/:paneId/aside/close', asyn
 
 /**
  * Unblocking is optimistic by design: we send the keystroke without knowing
- * what the prompt is, then the client re-reads the pane to show what happened.
+ * what the prompt is, then the client re-reads the pane to show what happened —
+ * bar the one Enter `answerKeys` refuses (`enterDeclines`).
  */
 app.post<{ Params: { paneId: string }; Body: { keys?: string[] } }>(
   '/api/agents/:paneId/keys',
@@ -583,7 +584,7 @@ app.post<{ Params: { paneId: string }; Body: { keys?: string[] } }>(
     if (!Array.isArray(keys) || keys.length === 0) {
       return reply.code(400).send({ error: 'keys is required' });
     }
-    return act(reply, () => herdr.sendKeys(req.params.paneId, keys));
+    return act(reply, () => herdr.answerKeys(req.params.paneId, keys));
   },
 );
 

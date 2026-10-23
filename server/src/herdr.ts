@@ -205,6 +205,24 @@ export function paneTookText(before: string, after: string): boolean {
 }
 
 /**
+ * Whether Enter would DECLINE an AskUserQuestion — its highlighted row is the
+ * custom-answer row with nothing typed in it. Measured on v2.1.309 against a
+ * live four-question dialog: that one Enter ended the tool as "User declined to
+ * answer questions", every answer already given on the other tabs discarded,
+ * recorded exactly as a human's Esc would be. Typed text replaces the
+ * placeholder (`❯ 4. some words`) and a given answer reads `3. teal ✔`, so
+ * only the bare placeholder matches.
+ *
+ * The one row of a prompt this path reads, and only to refuse: a restyled
+ * dialog makes this quiet rather than wrong. The last `❯` line is the
+ * highlight — echoes of earlier prompts all sit above the dialog.
+ */
+export function enterDeclines(pane: string): boolean {
+  const row = pane.split('\n').filter((line) => line.trimStart().startsWith('❯')).pop();
+  return row !== undefined && /^\s*❯\s*\d+\.\s+Type something\.\s*$/.test(row);
+}
+
+/**
  * Whether a pane's LAST line is a shell prompt — the command typed into it ran
  * and handed the shell back. A prompt-shaped last line is not enough on its
  * own: a Claude Code box is a `❯` line, and a custom status line can end in
@@ -811,15 +829,44 @@ export class Herdr {
     const result = await this.request('pane.send_input', { pane_id: paneId, text });
 
     await new Promise((r) => setTimeout(r, SUBMIT_CHECK_MS));
-    if (!paneTookText(before, await this.read(paneId))) {
+    const after = await this.read(paneId);
+    if (!paneTookText(before, after)) {
       throw new Error(
         'the pane ignored those words — a dialog like this takes keys, not text. '
         + 'Highlight the row that asks for text (↑/↓), then send them again.',
       );
     }
+    // The screen changing is not proof the words landed: an arrow the human
+    // clicked just before sending can arrive after the text was swallowed and
+    // redraw the highlight onto the empty answer row, where this Enter would
+    // decline the whole question set.
+    if (enterDeclines(after)) {
+      throw new Error('those words did not reach the answer row — it is highlighted now, so send them again.');
+    }
 
     await this.request('pane.send_input', { pane_id: paneId, keys: ['enter'] });
     return result;
+  }
+
+  /**
+   * The blocked panel's keystrokes: `sendKeys`, except an Enter that would
+   * decline an AskUserQuestion (`enterDeclines`) is refused. Measured: every
+   * declined dialog in the Herdr log was ended by a panel key within 10ms, after
+   * the human had arrowed onto the answer row and typed their words into the
+   * panel's box — so the `enter` button submitted the empty row instead.
+   */
+  async answerKeys(paneId: string, keys: string[]): Promise<unknown> {
+    if (!keys.includes('enter')) return this.sendKeys(paneId, keys);
+    // The row is read before anything is sent, so it is only the row Enter
+    // lands on when Enter goes alone: `down enter` from the row above passes.
+    if (keys.length > 1) throw new Error('send Enter on its own, so the row it lands on can be checked first.');
+    if (enterDeclines(await this.read(paneId))) {
+      throw new Error(
+        'Enter on an empty “Type something.” row cancels every question. '
+        + 'Send your words from the box below instead.',
+      );
+    }
+    return this.sendKeys(paneId, keys);
   }
 
   focus(target: string): Promise<unknown> {

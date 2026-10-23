@@ -749,6 +749,14 @@ foot of the board because that is where the bars that prompt it are.
   `[Pasted text #1 …]`. Refusing is the whole answer available: driving words into the right
   row means finding it, which means parsing the prompt. The human highlights it (`↑/↓`) and
   sends again, and the panel keeps their sentence in the box meanwhile.
+  **Enter on the EMPTY `Type something.` row declines the whole AskUserQuestion**, every
+  answer already given on its other tabs discarded, recorded exactly as an Esc. Measured on
+  v2.1.309, and it was the "custom answers get interrupted" bug: the Herdr log put a panel
+  key press within 10ms of every declined dialog, the human having arrowed onto that row and
+  typed into the panel's box, so the `enter` BUTTON submitted the empty row. `enterDeclines`
+  refuses that Enter in `answerKeys` (the `/keys` route) and in `sendText`, where swallowed
+  text plus an arrow still in flight changes the screen without the words having landed.
+  It is the one row this path reads, and only to refuse — a restyled dialog makes it quiet.
 - **Context usage is exact; its window is inferred.** `contextOf` sums `input_tokens +
   cache_read + cache_creation` of the newest non-sidechain `assistant` entry — that IS what
   the model was sent, and a compaction shows up for free as the next request measuring less.

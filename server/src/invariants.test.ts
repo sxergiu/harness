@@ -10,7 +10,8 @@ import {
 } from './claudeFiles.js';
 import { buildAgentDiff, within } from './diff.js';
 import {
-  announces, backoffMs, paneTookText, promptBoxHolds, returnedToShell, shellTail, staleServerWarning, type PaneInfo,
+  announces, backoffMs, enterDeclines, paneTookText, promptBoxHolds, returnedToShell, shellTail, staleServerWarning,
+  type PaneInfo,
 } from './herdr.js';
 import { parse as parseRecent } from './history.js';
 import { isOurs, merge, versionOf } from './herdrRules.js';
@@ -176,6 +177,42 @@ test('the signal is the SCREEN, not our words — a collapsed paste still counts
   // that in fact landed.
   const pasted = question(['  1. Cats', '  2. Dogs', '❯ 3. [Pasted text #1 +61 lines]', '  4. Chat about this']);
   assert.equal(paneTookText(unanswered, pasted), true);
+});
+
+// -- the Enter that declines every question --------------------------------
+// Enter on the empty custom row ends a multi-question AskUserQuestion as
+// "declined", discarding the answers given on the other tabs. Fixtures are a
+// live v2.1.309 dialog; the rule sits between the custom row and "Chat".
+
+const tabs = (rows: string[]): string => [
+  '❯ Read incident.json and call AskUserQuestion with it.',
+  '─────',
+  '←  ☒ Run target  ☐ Granularity  ✔ Submit  →',
+  '',
+  'How many run forks per agent?',
+  '',
+  ...rows,
+  '─────',
+  '  4. Chat about this',
+  '',
+  'Enter to select · Tab/Arrow keys to navigate · ctrl+g to edit in Notepad · Esc to cancel',
+].join('\n');
+
+test('Enter on the EMPTY custom row is the one that declines', () => {
+  assert.equal(enterDeclines(tabs(['  1. One per agent', '  2. One per run', '❯ 3. Type something.'])), true);
+});
+
+test('typed words, a given answer and an option row all take Enter normally', () => {
+  assert.equal(enterDeclines(tabs(['  1. One per agent', '  2. One per run', '❯ 3. one per agent, reused'])), false);
+  assert.equal(enterDeclines(tabs(['  1. One per agent', '  2. One per run', '❯ 3. teal ✔'])), false);
+  assert.equal(enterDeclines(tabs(['❯ 1. One per agent', '  2. One per run', '  3. Type something.'])), false);
+});
+
+test('the prompt echoed above the dialog is not the highlight', () => {
+  // Every `❯` echo sits above the dialog, so only the last `❯` line counts —
+  // and an ordinary prompt box saying "Type something." is not a dialog row.
+  assert.equal(enterDeclines('❯ 3. Type something.\nsome output\n❯ '), false);
+  assert.equal(enterDeclines('❯ Type something.'), false);
 });
 
 // -- the upgrade trap ------------------------------------------------------

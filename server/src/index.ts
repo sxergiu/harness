@@ -9,7 +9,7 @@ import { WebSocketServer, type WebSocket } from 'ws';
 import {
   AGENT_SHADES, BIND_HOST, DEFAULT_PORT, DEV_PAGE_PORT, EFFORTS, MODELS, WS_PATH, bashMode,
   type AccountView, type AgentDiff, type AgentShade, type AsideView, type BlockedView,
-  type FeedEntry, type FeedPage, type FileContent, type HerdrRuleState, type PermissionsState,
+  type FeedEntry, type FeedPage, type FileCandidates, type FileContent, type HerdrRuleState, type PermissionsState,
   type ServerEvent, type SettingsView, type ShellTail, type SubagentsView, type UsageView,
 } from '@harness/shared';
 import { Account } from './account.js';
@@ -410,11 +410,11 @@ app.get<{ Params: { paneId: string }; Querystring: { path?: string } }>(
     if (!row) return reply.code(404).send({ error: 'no such agent' });
 
     try {
-      return readAgentFile(
+      return (await readAgentFile(
         row.cwd,
         req.query.path ?? '',
         touchedPaths(board.entries(req.params.paneId)),
-      ) satisfies FileContent;
+      )) satisfies FileContent | FileCandidates;
     } catch (err) {
       return reply.code(409).send({ error: (err as Error).message });
     }

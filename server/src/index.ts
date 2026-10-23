@@ -10,7 +10,8 @@ import {
   AGENT_SHADES, BIND_HOST, DEFAULT_PORT, DEV_PAGE_PORT, EFFORTS, MODELS, WS_PATH, bashMode,
   type AccountView, type AgentDiff, type AgentShade, type AsideView, type BlockedView,
   type FeedEntry, type FeedPage, type FileCandidates, type FileContent, type HerdrRuleState, type PermissionsState,
-  type ServerEvent, type SettingsView, type ShellTail, type SubagentsView, type UsageView,
+  type ServerEvent, type SettingsView, type ShellTail, type SubagentsView, type SummaryView,
+  type UsageView,
 } from '@harness/shared';
 import { Account } from './account.js';
 import { ASIDE_FORK, Aside, RUN_FORK } from './aside.js';
@@ -36,6 +37,7 @@ import {
   modelDefault, resumeArgs, rulesAreDefault, rulesText, setModelDefault, setRules, startArgs,
 } from './rules.js';
 import { Ping } from './ping.js';
+import { Summaries } from './summary.js';
 import { Transcripts, feedTurns, subagentPathFor, subagentRows } from './transcript.js';
 import { Usage } from './usage.js';
 
@@ -288,6 +290,7 @@ const board = new Board(
     broadcast({ type: 'recent', recent: board.recent() });
   },
   (paneId) => { for (const [, fork] of FORKS) void fork.close(paneId).catch(() => {}); },
+  (paneId) => summaries.request(paneId),
 );
 
 /**
@@ -298,6 +301,9 @@ const usage = new Usage(herdr);
 
 /** A fresh agent of our own, pinged to wake agents stalled on API timeouts. */
 const ping = new Ping(herdr);
+
+/** Each conversation's running brief, rewritten after every finished turn by an agent of our own. */
+const summaries = new Summaries(herdr, board);
 
 /**
  * Which account those limits belong to, and the way to a different one when it
@@ -368,6 +374,23 @@ app.get<{ Params: { paneId: string } }>('/api/agents/:paneId/subagents', async (
     ),
   };
   return view;
+});
+
+app.get<{ Params: { paneId: string } }>('/api/agents/:paneId/summary', async (req, reply) => {
+  const row = board.row(req.params.paneId);
+  if (!row) return reply.code(404).send({ error: 'no such agent' });
+  const view: SummaryView = summaries.view(row);
+  return view;
+});
+
+/**
+ * Rebuilds the summary from the first turn. Queued, not awaited: a job can take
+ * a minute, and `app.close()` waits on requests in flight.
+ */
+app.post<{ Params: { paneId: string } }>('/api/agents/:paneId/summary', async (req, reply) => {
+  const row = board.row(req.params.paneId);
+  if (!row) return reply.code(404).send({ error: 'no such agent' });
+  return act(reply, async () => summaries.request(row.paneId, true));
 });
 
 /**
@@ -1368,7 +1391,7 @@ function shutdown(cause: string): void {
   release();
   void Promise.race([
     Promise.all([
-      usage.close().catch(() => {}), ping.close().catch(() => {}),
+      usage.close().catch(() => {}), ping.close().catch(() => {}), summaries.close().catch(() => {}),
     ]),
     new Promise((r) => setTimeout(r, CLEANUP_MS)),
   ]).then(() => {

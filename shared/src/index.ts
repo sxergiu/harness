@@ -418,6 +418,18 @@ export interface SubagentsView {
   subagents: SubagentRow[];
 }
 
+/** One conversation's running brief, kept by an agent of the harness's own. */
+export interface SummaryView {
+  /** The markdown, or null when none has been written for this session yet. */
+  text: string | null;
+  /** When it was last written, ISO. */
+  at: string | null;
+  /** This agent's job, if one is waiting or running. */
+  state: 'queued' | 'running' | null;
+  /** The newest job's failure for this session, cleared by a success. */
+  error: string | null;
+}
+
 // ---------------------------------------------------------------------------
 // Aside
 // ---------------------------------------------------------------------------

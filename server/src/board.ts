@@ -2,7 +2,7 @@ import { basename } from 'node:path';
 import {
   STATUS_ORDER, type AgentRow, type AgentShade, type AgentStatus, type WorkspaceRow,
 } from '@harness/shared';
-import { ASIDE_PREFIX, asideName } from './aside.js';
+import { ASIDE_FORK, ASIDE_PREFIX, RUN_FORK, asideName } from './aside.js';
 import { answerChromeDialog, forgetPane as forgetChromeDialog } from './chrome.js';
 import { settleSettings } from './claudeFiles.js';
 import { touchedPaths } from './diff.js';
@@ -772,7 +772,7 @@ export class Board {
 export function dormantSession(p: PaneInfo, tabLabel: string | null | undefined): string | null {
   const session = p.agent_session;
   if (p.agent || !session || session.kind !== 'id' || session.agent !== 'claude') return null;
-  if (tabLabel === 'aside' || tabLabel === 'usage') return null;
+  if (tabLabel === ASIDE_FORK.label || tabLabel === RUN_FORK.label || tabLabel === 'usage') return null;
   return session.value;
 }
 
@@ -916,10 +916,13 @@ function place(members: AgentRow[], locks: Map<string, number>): AgentRow[] {
  * no work and no changelist, and an aside additionally carries a copy of its
  * parent's `toolUseResult` entries, which on the board would read as the aside
  * having done the parent's work (invariant 10). They are still real panes in
- * Herdr, labelled `usage` and `aside`, so they remain findable there.
+ * Herdr, labelled `usage`, `aside` and `aside-run`, so they remain findable
+ * there.
  *
  * An aside gets no row of its own, which is the whole of what invariants 10 and
- * 18 ask for. Its STATUS is a dot on its parent's row — see `forkStatuses`.
+ * 18 ask for. Its STATUS is a dot on its parent's row — see `forkStatuses`. The
+ * run fork is named `aside-…-run` so this prefix covers it too, and its status
+ * reaches nothing: the ring looks up the aside's name alone.
  *
  * Matched by prefix, which means an agent the human hand-named `aside-…` would
  * vanish from the board. Deliberate: a registry of exact pane ids would not

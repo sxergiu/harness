@@ -438,7 +438,8 @@ server/src/
   herdrRules.ts       merges our one detection rule into Herdr's current manifest
   chrome.ts           answering that dialog with "allow" when the human has said
                       it may. The only key this cockpit presses on its own
-  aside.ts            side conversations forked off an agent's session
+  aside.ts            side conversations forked off an agent's session: the aside,
+                      and the run fork its ▶ runs go to
   notify.ts           osascript + afplay, plus a Herdr toast
   instance.ts         the single-instance lock, and where to point the browser
   origin.ts           who may talk to an unauthenticated server. THE security boundary
@@ -456,8 +457,10 @@ web/src/
                       "working" looks like — board row, header and panels all read it
   Settings.tsx        rules, checkouts, the Claude files, the Herdr rule. One GET,
                       and every write answers with the whole view back
-  FileView.tsx        a file the agent named, read from disk into the right-hand
-                      split it shares with the fork panel
+  FileView.tsx        a file the agent named, read from disk into a stack in the
+                      rightmost column, beside the fork's
+  panels.ts           which of those columns each pane had open, per browser.
+                      Carries the cwd, because pane ids recycle
   fileRef.ts          which code spans are worth a link. NOISE control, never the
                       security one — `readAgentFile` re-checks whatever it sends
   Diff.tsx, Markdown.tsx, useHarness.ts
@@ -483,7 +486,10 @@ is kept off the board.
 - **One per parent, found again by NAME, and nothing is remembered.** `aside-<parent pane
   id slugified>` — `w2:pJ` → `aside-w2-pj`. Pane ids are `w<n>:p<base36 UPPERCASE>`, so
   lowercasing cannot collide two panes into one name. Same trick as `usage.ts`: a harness
-  restart neither strands an aside nor starts a second.
+  restart neither strands an aside nor starts a second. The RUN FORK ▶ runs go to is a
+  second one per parent, `aside-<slug>-run`: the prefix keeps the board's exclusion
+  covering it, no slug ends in `-run` so the two never share a name, and `forkStatuses`
+  looks up the bare name alone, so its status reaches no ring.
 - **`board.ts` excludes it BEFORE `syncName`.** That rename tracks an agent's terminal
   title, and an instrument renamed off its own name can never be found again. Matched by
   prefix, so an agent a human hand-names `aside-…` would vanish from the board — accepted,
@@ -949,16 +955,24 @@ three are verified working through that path.
 - **`/goal <condition>`** makes Claude keep working unprompted until a fast model judges the
   condition met. `/goal clear` (or stop/off/reset/none/cancel) removes it; `/clear` drops it
   too.
-- **`! <command>` is Claude Code's bash mode, and a prose block's ▶ run is that and nothing
-  more.** `POST /api/agents/:paneId/shell` turns a fenced block into the `!` line
-  (`bashMode` in `shared`, so the browser can recognise the run it started) and sends it
-  through `herdr.prompt`. Measured on 2.1.295: a run is recorded as TWO `user` entries,
+- **`! <command>` is Claude Code's bash mode, and a prose block's ▶ run is that, sent to
+  the RUN FORK and never to the agent.** `POST /api/agents/:paneId/shell` turns a fenced
+  block into the `!` line (`bashMode` in `shared`, so the browser can recognise the run it
+  started) and sends it through the run fork's `Aside.send`, starting the fork on the first
+  run (~10s). The run fork is a second fork of the agent's session beside the aside
+  (`RUN_FORK`, `aside-<slug>-run`, tab label `aside-run` — not `run`, which a space's name
+  can produce), told to answer each run in a few lines and PROPOSE the next command as a
+  tagged block, which its panel makes runnable into the same fork. Its panel stacks under
+  the aside's in one column, and the block in the main feed keeps only "sent to runs". The
+  panel does the send, from a queue the feed fills, because it holds the count of earlier
+  runs of the same command that a new one is told apart from. Measured on 2.1.295: a run is recorded as TWO `user` entries,
   `<bash-input> cmd</bash-input>` then `<bash-stdout>…</bash-stdout><bash-stderr>…</bash-stderr>`
   — the leading space is absent when the run was queued behind a working agent — and only
   once it has finished, so `feedTurns` folds the pair into one `shell` entry and the live
   output while it runs comes off the pane (`shellTail`). **No exit code is recorded
   anywhere**, so a box shows what was printed and never claims success. **Every `!` costs
-  the agent a model turn**: it answers the output unprompted. `!` runs Git Bash on
+  a model turn of whoever receives it**: it answers the output unprompted — which is why
+  runs go to the fork, whose answer is the explanation, and not to the agent. `!` runs Git Bash on
   Windows, so a PowerShell block goes in as `powershell -NoProfile -Command '…'` with a `'`
   written `'\''` — doubling it, PowerShell's own escape, is eaten by bash first. `console`
   blocks are not runnable: they are sessions, and running one runs its output.
@@ -1059,7 +1073,7 @@ Two things about that panel, both established on a live pane:
   is what makes adoption clean up too: the pane id is only recorded by a READING, so a
   cockpit that adopted an old agent and was closed without anyone pressing the button knows
   of no pane and has to ask for it by name.
-  **Asides deliberately do not close with it.** Each holds an exchange a human opened and
+  **Asides and run forks deliberately do not close with it.** Each holds an exchange a human opened and
   is found again by name when the harness comes back; this one holds nothing.
 - **A cold agent opens the dialog before it can fill it in.** Measured: the panel was on
   screen with its heading and no numbers under it, and the 4s poll gave up; the same request

@@ -4,6 +4,7 @@ import { join, resolve } from 'node:path';
 import { test } from 'node:test';
 import { aliasRuns, bashMode, sameAccount } from '@harness/shared';
 import { parse as parseAccounts, rowFor, statusOf } from './account.js';
+import { ASIDE_PREFIX, RUN_FORK, asideName } from './aside.js';
 import { dormantSession, launchStalled, seedCwd } from './board.js';
 import {
   HOLD_MS, decide, grantOf, holdFor, mayTrust, pinAction, settleAction, trustKey,
@@ -18,7 +19,7 @@ import { isOurs, merge, versionOf } from './herdrRules.js';
 import { shouldOpen, type Running } from './instance.js';
 import { admits, isLocal } from './origin.js';
 import { parse } from './projects.js';
-import { argsFor, DEFAULT_RULES, flatten, modelFrom, resumeArgs, rulesFor } from './rules.js';
+import { argsFor, DEFAULT_RULES, flatten, modelFrom, resumeArgs, rulesFor, runArgs } from './rules.js';
 import { parse as parseShades } from './shades.js';
 import {
   aliasDisproven, contextOf, effortDisproven, effortOf, feedTurns, goalOf, modelOf, slugForCwd,
@@ -1125,6 +1126,23 @@ test('a dormant instrument stays off the board (invariant 18)', () => {
   const pane = paneAt('p1', '/repos/a', { agent_session: session });
   assert.equal(dormantSession(pane, 'aside'), null);
   assert.equal(dormantSession(pane, 'usage'), null);
+  assert.equal(dormantSession(pane, RUN_FORK.label), null);
+});
+
+test('the run fork is a fork the board hides, and never the aside', () => {
+  const run = asideName('w12:pZZ9', RUN_FORK.suffix);
+  // The prefix is the board's exclusion; the aside's own name is what the ring
+  // on the parent's row looks up, so the two must differ or one agent is both.
+  assert.ok(run.startsWith(ASIDE_PREFIX));
+  assert.notEqual(run, asideName('w12:pZZ9'));
+  assert.match(run, /^[a-z][a-z0-9_-]{0,31}$/);
+});
+
+test('the run fork’s prompt survives as one argument (invariant 11)', () => {
+  const args = runArgs('u1');
+  assert.deepEqual(args.slice(0, 4), ['--resume', 'u1', '--fork-session', '--append-system-prompt']);
+  assert.ok(!args[4].includes('"') && !args[4].includes('\n'));
+  assert.ok(args[4].endsWith('It is not yours.'));
 });
 
 test('a RECENT row is never resumable, whatever the file says', () => {

@@ -1,7 +1,7 @@
 import type { AgentRow, AsideView } from '@harness/shared';
 import { touchedPaths } from './diff.js';
 import { asStatus, type AgentInfo, type Herdr } from './herdr.js';
-import { asideArgs } from './rules.js';
+import { asideArgs, runArgs } from './rules.js';
 import { Transcripts, feedTurns, transcriptPathFor, type Entry } from './transcript.js';
 
 /**
@@ -36,14 +36,37 @@ const EMPTY: AsideView = { paneId: null, status: null, entries: [], filesWritten
  * lowercasing cannot map two panes onto one name. The longest real id leaves the
  * result well inside 32 characters.
  */
-export const asideName = (parentPaneId: string): string =>
-  ASIDE_PREFIX + parentPaneId.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+export const asideName = (parentPaneId: string, suffix = ''): string =>
+  ASIDE_PREFIX + parentPaneId.toLowerCase().replace(/[^a-z0-9]+/g, '-') + suffix;
+
+/**
+ * Which fork of the parent this is. The run fork takes the human's ▶ runs, so
+ * their output and its explanation never enter the parent's context. Its name
+ * keeps the aside prefix so the board's exclusion covers it, and the suffix is
+ * one no slug ends in, so the two forks can never be one agent.
+ */
+export interface ForkKind {
+  suffix: string;
+  /** The tab label, which is all that keeps a DORMANT fork off the board. */
+  label: string;
+  args: (sessionUuid: string) => string[];
+}
+
+export const ASIDE_FORK: ForkKind = { suffix: '', label: 'aside', args: asideArgs };
+// Not `run`: a cockpit start labels its tab with the agent's name, which comes
+// from the space's, so a space called "run" would vanish from the board on a
+// failed restore.
+export const RUN_FORK: ForkKind = { suffix: '-run', label: 'aside-run', args: runArgs };
 
 export class Aside {
   /** Fork transcripts are read here and nowhere else; the board never sees one. */
   private readonly transcripts = new Transcripts();
 
-  constructor(private readonly herdr: Herdr) {}
+  constructor(private readonly herdr: Herdr, private readonly kind: ForkKind) {}
+
+  private name(parentPaneId: string): string {
+    return asideName(parentPaneId, this.kind.suffix);
+  }
 
   async view(parent: AgentRow, parentEntries: Entry[]): Promise<AsideView> {
     const open = await this.current(parent.paneId, parentEntries);
@@ -80,12 +103,12 @@ export class Aside {
    * where `/exit` would cost a turn and leave a bare shell behind.
    */
   async close(parentPaneId: string): Promise<void> {
-    const info = await this.herdr.agentInfo(asideName(parentPaneId));
+    const info = await this.herdr.agentInfo(this.name(parentPaneId));
     if (!info) return;
     // Not the same as having no aside, and it must not read as one: answering
     // ok would shut the panel over a fork that is still running, and the next
     // question would start a second one under the same name.
-    if (!info.tab_id) throw new Error('herdr gave the aside no tab to close');
+    if (!info.tab_id) throw new Error('herdr gave the fork no tab to close');
     await this.herdr.request('tab.close', { tab_id: info.tab_id });
   }
 
@@ -98,7 +121,7 @@ export class Aside {
     parentPaneId: string,
     parentEntries: Entry[],
   ): Promise<{ info: AgentInfo; fresh: Entry[] } | null> {
-    const info = await this.herdr.agentInfo(asideName(parentPaneId));
+    const info = await this.herdr.agentInfo(this.name(parentPaneId));
     if (!info) return null;
 
     const path = info.cwd && info.agent_session
@@ -123,9 +146,9 @@ export class Aside {
     // `claude` prints "No conversation found" and exits, and the tab would
     // otherwise stay as a bare shell nothing can find again.
     return this.herdr.launchAgent(
-      asideName(parent.paneId),
-      { workspaceId: parent.workspaceId, cwd: parent.cwd, label: 'aside' },
-      asideArgs(parent.sessionUuid),
+      this.name(parent.paneId),
+      { workspaceId: parent.workspaceId, cwd: parent.cwd, label: this.kind.label },
+      this.kind.args(parent.sessionUuid),
     );
   }
 }

@@ -263,6 +263,32 @@ under it is a collision it will never see coming.
 Do not carry on the work above. It is not yours. You are here to explain it.`;
 
 /**
+ * What the RUN FORK is told: the fork that takes the human's ▶ runs, so a
+ * command's output and its explanation never enter the parent. Short because it
+ * is read in a panel beside the feed, and it PROPOSES the next command rather
+ * than running it, so each step is still the human's click. An untagged fence
+ * gets no ▶, which is why the tag is spelled out.
+ */
+const RUN = `You are a run fork: a copy of another agent's session, kept so the human can
+run shell commands against that agent's work without spending its turns.
+Everything above is that agent's conversation, copied. It is still running, and
+nothing you say reaches it.
+
+Each bash-mode entry from here on is a command the human ran and what it printed.
+Answer every run in a few lines: what the result means (passed or failed, and the
+one detail that matters). Do not restate the output. No preamble.
+
+Then, only when there is an obvious next step, propose the next command or
+commands, one per fenced block, tagged bash, or powershell for a PowerShell
+command. An untagged block cannot be run. Propose nothing when nothing follows.
+
+Run nothing yourself and change nothing: no Bash, no Write, no Edit. The agent you
+were forked from is working in this same checkout. Read a file only when the
+output cannot be explained without it.
+
+Do not carry on the work above. It is not yours.`;
+
+/**
  * A dormant pane's conversation, resumed with the rules and model a cockpit
  * start passes. Herdr's own restore types a bare `claude --resume <id>`, so even
  * a restore that WORKS leaves every agent it brings back without either.
@@ -276,10 +302,13 @@ export function resumeArgs(sessionUuid: string, start: string[]): string[] {
  * this safe to run against a LIVE agent: verified on pane w2:pG, the parent's
  * transcript was byte-identical afterwards, so the main feed does not move.
  */
-export function asideArgs(sessionUuid: string): string[] {
+function forkArgs(sessionUuid: string, prompt: string): string[] {
   return [
     '--resume', sessionUuid,
     '--fork-session',
-    '--append-system-prompt', flatten(ASIDE),
+    '--append-system-prompt', flatten(prompt),
   ];
 }
+
+export const asideArgs = (sessionUuid: string): string[] => forkArgs(sessionUuid, ASIDE);
+export const runArgs = (sessionUuid: string): string[] => forkArgs(sessionUuid, RUN);

@@ -1,13 +1,16 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  EFFORTS, MODELS,
-  type AgentRow, type AsideView, type BlockedView, type EffortLevel, type ModelAlias,
+  EFFORTS, MODELS, bashMode,
+  type AgentRow, type AsideView, type BlockedView, type EffortLevel, type FeedEntry, type ModelAlias,
+  type ShellTail,
 } from '@harness/shared';
+import { Stream, type ShellRunner } from './CodeBlock.js';
 import { useSelectionCopy } from './copyOnSelect.js';
 import { DiffTab } from './Diff.js';
 import { EntryRow, Feed } from './Feed.js';
 import type { FileViewer } from './fileRef.js';
 import { FileView } from './FileView.js';
+import { type Panels, panelsOf, rememberPanels } from './panels.js';
 import { ContextMeter, Spinner, StatusDot, Working } from './Status.js';
 import { SubagentsTab } from './Subagents.js';
 import { modelLabel, modelReading, since, useApi } from './useHarness.js';
@@ -28,21 +31,22 @@ export const PROMPT_ROW_H = 26;
 const MAX_VH = 60;
 
 /**
- * Opening width of the right-hand split in px, the floor a drag may not go
- * under, and the ceiling in vw — past which the split has stopped being a feed
- * with something beside it. One set of numbers for whichever companion is in the
- * slot, so the width you dragged survives switching between them.
+ * Opening width of a right-hand column in px, the floor a drag may not go under,
+ * and the ceiling in vw for the columns TOGETHER — past which the view has
+ * stopped being a feed with something beside it.
  */
 const SPLIT_W = 420;
 const SPLIT_MIN_W = 260;
 const SPLIT_MAX_VW = 70;
 
 /**
- * What is in the right-hand split. One piece of state rather than a flag each,
- * for the same reason `Composing` below is: mutual exclusion is then a fact about
- * the slot instead of a rule two handlers have to keep remembering.
+ * The widths you dragged, kept outside the view for `drafts`' reason: it
+ * remounts on every agent switch and `/clear`, and a column that snapped back
+ * each time would have to be dragged again every time. In memory only.
  */
-type Companion = 'fork' | 'file';
+const widths: Record<Column, number> = { fork: SPLIT_W, files: SPLIT_W };
+
+const MAX_FILES = 4;
 
 /**
  * Unsent prompts by pane, kept outside the view because the view remounts
@@ -117,6 +121,9 @@ export function StartingView({ where }: { where: string }): React.ReactElement {
     </div>
   );
 }
+
+/** The columns beside the tabs, in the order they sit left to right. */
+type Column = 'fork' | 'files';
 
 /** Which command an assignment came from. One slot, so these are alternatives. */
 type AssignKind = NonNullable<AgentRow['assignment']>['kind'];
@@ -383,19 +390,48 @@ export function AgentView(
   /** /clear destroys a conversation, so it does not fire on one click. */
   const [confirmClear, setConfirmClear] = useState(false);
   /**
-   * The companion splits this view rather than replacing a tab, because the
-   * whole point of both of them is reading the output and the answer — or the
-   * file — at the same time. Not remembered: the view remounts on
-   * `paneId:sessionUuid`, so a `/clear` shuts a panel whose fork is of a
-   * conversation that no longer exists.
+   * The fork and the files split this view rather than replacing a tab, because
+   * the whole point of both is reading the output and the answer — or the file —
+   * at the same time. Remembered per pane across a `/clear` too: the server
+   * closes the fork when the session ends, so a fork panel coming back open is
+   * an empty one whose next question forks the new conversation.
    */
-  const [companion, setCompanion] = useState<Companion | null>(null);
-  const [splitW, setSplitW] = useState(SPLIT_W);
+  const [panels, setPanels] = useState<Panels>(() => panelsOf(agent.paneId, agent.cwd));
+  useEffect(() => rememberPanels(agent.paneId, agent.cwd, panels), [agent.paneId, agent.cwd, panels]);
+  const [splitW, setSplitW] = useState(() => ({ ...widths }));
+  // Live only: a fork is of a running session, and the button that shuts the
+  // panel is drawn for a live agent alone — so a RECENT or dormant row keeps the
+  // remembered choice without showing a panel nothing could close.
+  const forkOpen = (panels.fork || panels.runs) && agent.live;
   /**
-   * The file the viewer is showing, kept while the fork is in front of it so
-   * switching back does not lose your place.
+   * ▶ runs the feed has handed off and the run panel has not yet taken. The
+   * panel does the send, because it is what knows the baseline a run is told
+   * apart from an earlier one of the same command by — and a queue rather than
+   * a slot, so two quick ▶s on two blocks cannot lose one while its block
+   * already says it ran.
    */
-  const [file, setFile] = useState<string | null>(null);
+  const [runQueue, setRunQueue] = useState<RunRequest[]>([]);
+  const runInFork = useCallback((code: string, language: string | null) => {
+    setPanels((s) => ({ ...s, runs: true }));
+    setRunQueue((q) => [...q, { code, language }]);
+  }, []);
+  const takeRun = useCallback(() => setRunQueue((q) => q.slice(1)), []);
+  /** The feed's blocks and the run fork's own proposals run into the one queue. */
+  const forkRunner = useMemo<ShellRunner>(() => ({ target: 'the run fork', run: runInFork }), [runInFork]);
+  /**
+   * What each column is drawn at, 0 when shut. The drag holds the shared
+   * ceiling, but opening the second column does not drag anything, so the files
+   * yield here to whatever room the fork has left them.
+   */
+  const shownW: Record<Column, number> = {
+    fork: forkOpen ? splitW.fork : 0,
+    files: panels.files.length
+      ? Math.max(
+        SPLIT_MIN_W,
+        Math.min(splitW.files, (window.innerWidth * SPLIT_MAX_VW) / 100 - (forkOpen ? splitW.fork : 0)),
+      )
+      : 0,
+  };
   /**
    * `/goal`, `/feature` and `/investigate` each take a sentence, and the two
    * assignments set the same slot — so all three share one box and which button
@@ -451,18 +487,23 @@ export function AgentView(
   };
 
   /**
-   * Drags the split wider by its left border: left is where it grows. Listens on
+   * Drags a column wider by its left border: left is where it grows. Listens on
    * the window rather than the strip so the drag survives the pointer outrunning
    * an 8px target, and `pointercancel` ends it too — nothing follows one, so a
    * drag left bound there would keep resizing with no button held.
+   *
+   * The ceiling is shared, so the other open column's width comes off it: two
+   * columns each allowed the whole of it would push the feed off the screen.
    */
-  const startSplitResize = (e: React.PointerEvent): void => {
+  const startSplitResize = (col: Column) => (e: React.PointerEvent): void => {
     e.preventDefault();
     const originX = e.clientX;
-    const originW = splitW;
-    const ceiling = (window.innerWidth * SPLIT_MAX_VW) / 100;
-    const move = (ev: PointerEvent): void =>
-      setSplitW(Math.max(SPLIT_MIN_W, Math.min(ceiling, originW + originX - ev.clientX)));
+    const originW = shownW[col];
+    const ceiling = (window.innerWidth * SPLIT_MAX_VW) / 100 - (col === 'fork' ? shownW.files : shownW.fork);
+    const move = (ev: PointerEvent): void => {
+      widths[col] = Math.max(SPLIT_MIN_W, Math.min(ceiling, originW + originX - ev.clientX));
+      setSplitW({ ...widths });
+    };
     const stop = (): void => {
       window.removeEventListener('pointermove', move);
       window.removeEventListener('pointerup', stop);
@@ -472,6 +513,14 @@ export function AgentView(
     window.addEventListener('pointerup', stop);
     window.addEventListener('pointercancel', stop);
   };
+
+  const resizer = (col: Column): React.ReactElement => (
+    <div
+      onPointerDown={startSplitResize(col)}
+      title="Drag to resize"
+      className="w-1 shrink-0 cursor-ew-resize bg-neutral-800 hover:bg-neutral-600"
+    />
+  );
 
   /**
    * Slash commands go down the same path as any other prompt — Claude Code
@@ -499,10 +548,19 @@ export function AgentView(
   /**
    * What a file reference does when clicked, wherever it appears — a tool row, a
    * code span in the agent's prose, a code span in a file the panel is already
-   * showing. Memoised on the cwd alone, since the setters are stable.
+   * showing. A file already open moves to the top rather than opening twice, and
+   * past `MAX_FILES` the oldest closes: each file is a share of one column's
+   * height, and a dozen shares is a dozen headers with nothing under them.
+   * Memoised on the cwd alone, since the setter is stable.
    */
   const viewer = useMemo<FileViewer>(
-    () => ({ cwd: agent.cwd, open: (p) => { setFile(p); setCompanion('file'); } }),
+    () => ({
+      cwd: agent.cwd,
+      open: (p) => setPanels((s) => ({
+        ...s,
+        files: [p, ...s.files.filter((f) => f !== p)].slice(0, MAX_FILES),
+      })),
+    }),
     [agent.cwd],
   );
 
@@ -555,11 +613,22 @@ export function AgentView(
                 showing, so it opens beside them rather than over them.
               */}
               <button
-                onClick={() => setCompanion(companion === 'fork' ? null : 'fork')}
-                className={companion === 'fork' ? 'text-neutral-200' : 'text-neutral-400 hover:text-neutral-200'}
+                onClick={() => setPanels((s) => ({ ...s, fork: !s.fork }))}
+                className={panels.fork ? 'text-neutral-200' : 'text-neutral-400 hover:text-neutral-200'}
                 title="Ask about this without spending the agent's turn — forks the session, so its feed does not move"
               >
                 fork
+              </button>
+              <button
+                onClick={() => {
+                  // Shutting drops what is queued, as the panel's own × does.
+                  if (panels.runs) setRunQueue([]);
+                  setPanels((s) => ({ ...s, runs: !s.runs }));
+                }}
+                className={panels.runs ? 'text-neutral-200' : 'text-neutral-400 hover:text-neutral-200'}
+                title="The ▶ runs from this agent's blocks — a fork of its session runs each and explains the result"
+              >
+                runs
               </button>
               <button
                 onClick={() => open('goal')}
@@ -754,17 +823,18 @@ export function AgentView(
       </nav>
 
       {/*
-        The companion splits this row, not the whole view: the prompt bar below
+        The fork and the files split this row, not the whole view: the prompt bar below
         stays full width and stays the PARENT's, which is the one confusion a
         second input in the same view could cause. Because it is beside the tab
         rather than inside one, a question about the diff is asked the same way
         as a question about the feed.
 
-        One companion at a time. Switching away from the fork only UNMOUNTS its
-        panel — `drop` is the one thing that ends the forked agent, so the fork
-        keeps running and is found again by name on the next fetch, with its whole
-        exchange. What that costs is the draft in its box, which is the right
-        trade against keeping a hidden panel's tick-driven fetch alive.
+        Toggling the fork shut only UNMOUNTS its panel — `drop` is the one thing
+        that ends the forked agent, so the fork keeps running and is found again
+        by name on the next fetch, with its whole exchange. What that costs is the
+        draft in its box, which is the right trade against keeping a hidden
+        panel's tick-driven fetch alive. The run panel likewise loses a pending
+        run's live tail, never the run: it lands as an entry when reopened.
       */}
       <div className="flex min-h-0 flex-1 overflow-hidden">
         {/* Each tab owns its own height: the diff scrolls its tree and its hunks
@@ -776,43 +846,66 @@ export function AgentView(
               tick={tick}
               jump={jump}
               viewer={viewer}
-              agent={agent.live ? { name: agent.name, working: agent.status === 'working' } : undefined}
+              runner={agent.live ? forkRunner : undefined}
             />
           )}
-          {tab === 'diff' && <DiffTab paneId={agent.paneId} tick={tick} />}
+          {tab === 'diff' && <DiffTab paneId={agent.paneId} tick={tick} viewer={viewer} />}
           {tab === 'subagents' && (
             <SubagentsTab paneId={agent.paneId} tick={tick} viewer={viewer} />
           )}
         </div>
-        {companion && (
+        {forkOpen && (
           <>
-            <div
-              onPointerDown={startSplitResize}
-              title="Drag to resize"
-              className="w-1 shrink-0 cursor-ew-resize bg-neutral-800 hover:bg-neutral-600"
-            />
-            <div style={{ width: splitW }} className="min-w-0 shrink-0 overflow-hidden">
-              {companion === 'fork'
-                ? (
-                  <AsidePanel
+            {resizer('fork')}
+            {/* The aside over the runs, each an equal share of the height like
+                the files beside them, either one alone the whole column. */}
+            <div style={{ width: shownW.fork }} className="flex min-w-0 shrink-0 flex-col overflow-hidden">
+              {panels.fork && (
+                <div className="min-h-0 flex-1 overflow-hidden">
+                  <ForkPanel
+                    kind="aside"
                     paneId={agent.paneId}
                     tick={tick}
                     viewer={viewer}
-                    onClose={() => setCompanion(null)}
+                    onClose={() => setPanels((s) => ({ ...s, fork: false }))}
                   />
-                )
-                : file && (
-                  // Keyed on the path, as the diff's copy button is: opening
-                  // another file is a fresh panel rather than new content
-                  // arriving under the heading of the last one.
-                  <FileView
-                    key={file}
+                </div>
+              )}
+              {panels.runs && (
+                <div className={`min-h-0 flex-1 overflow-hidden ${panels.fork ? 'border-t border-neutral-800' : ''}`}>
+                  <ForkPanel
+                    kind="run"
                     paneId={agent.paneId}
-                    path={file}
+                    tick={tick}
                     viewer={viewer}
-                    onClose={() => setCompanion(null)}
+                    runs={{ queue: runQueue, take: takeRun, runner: forkRunner }}
+                    // Runs still queued would otherwise fire whenever it next
+                    // opens, against whatever fork is there by then.
+                    onClose={() => { setRunQueue([]); setPanels((s) => ({ ...s, runs: false })); }}
                   />
-                )}
+                </div>
+              )}
+            </div>
+          </>
+        )}
+        {panels.files.length > 0 && (
+          <>
+            {resizer('files')}
+            {/* Newest on top, each an equal share of the height and its own
+                scrollport, so a long file never pushes the rest out of reach. */}
+            <div style={{ width: shownW.files }} className="flex min-w-0 shrink-0 flex-col overflow-hidden">
+              {panels.files.map((f, i) => (
+                // Keyed on the path, as the diff's copy button is: a file is
+                // its own panel, never another's content under its heading.
+                <div key={f} className={`min-h-0 flex-1 overflow-hidden ${i ? 'border-t border-neutral-800' : ''}`}>
+                  <FileView
+                    paneId={agent.paneId}
+                    path={f}
+                    viewer={viewer}
+                    onClose={() => setPanels((s) => ({ ...s, files: s.files.filter((g) => g !== f) }))}
+                  />
+                </div>
+              ))}
             </div>
           </>
         )}
@@ -892,55 +985,172 @@ export function AgentView(
   );
 }
 
+/** A ▶ run handed from a block to the run panel, which sends it. */
+interface RunRequest {
+  code: string;
+  language: string | null;
+}
+
+/**
+ * The two forks' differences, in one table for `ASSIGN`'s reason: one panel
+ * drawn twice must not drift into two opinions about what a fork looks like.
+ */
+const FORKS = {
+  aside: {
+    path: 'aside',
+    title: 'fork',
+    placeholder: 'ask about this…',
+    verb: 'ask',
+    empty: 'Ask about anything on the left. The question runs in a fork of this agent’s session, so its feed does not move.',
+  },
+  run: {
+    path: 'run',
+    title: 'runs',
+    placeholder: 'reply to the run fork…',
+    verb: 'send',
+    empty: '▶ run a shell block on the left. It runs in a fork of this agent’s session, which explains the result and proposes what to run next — the agent never sees it.',
+  },
+} as const;
+
+/** Recorded runs of exactly this command that have printed — what landing is counted in. */
+const runsOf = (entries: FeedEntry[], command: string): number =>
+  entries.filter((e) => e.kind === 'shell' && e.command === command && e.output !== null).length;
+
 /**
  * A side conversation forked off this agent's session, so a question about what
- * it just said costs it nothing: the fork gets its own transcript and the
- * agent's feed does not move.
+ * it just said — or a command run against its work — costs it nothing: the fork
+ * gets its own transcript and the agent's feed does not move.
  *
  * Only the exchange since the fork is shown. The conversation it was forked
  * with is the feed to the left of this panel, and rendering it twice on one
  * screen would be the whole point of the split thrown away.
  *
- * There is no start button. The panel opens empty and the first question forks
- * the session — which is slow the first time, and says so.
+ * There is no start button. The panel opens empty and the first question — or
+ * the first ▶ run — forks the session, which is slow the first time and says so.
+ *
+ * `runs` is the run fork's alone: the queue the feed's ▶ fills, and the runner
+ * that makes the fork's own proposed commands runnable into the same queue.
  */
-function AsidePanel(
-  { paneId, tick, viewer, onClose }: {
+function ForkPanel(
+  { kind, paneId, tick, viewer, runs, onClose }: {
+    kind: keyof typeof FORKS;
     paneId: string;
     tick: number;
     viewer: FileViewer;
+    runs?: { queue: RunRequest[]; take: () => void; runner: ShellRunner };
     onClose: () => void;
   },
 ): React.ReactElement {
+  const fork = FORKS[kind];
   const { get, post } = useApi();
   const [view, setView] = useState<AsideView | null>(null);
+  /**
+   * Whether the first fetch is back. A run is told apart from an earlier one of
+   * the same command by counting them, and counting before the view arrives
+   * would take a run that finished an hour ago for the one just sent.
+   */
+  const [loaded, setLoaded] = useState(false);
   const [failed, setFailed] = useState<string | null>(null);
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
   /** Bumped to refetch straight after acting, rather than waiting for a tick. */
   const [reload, setReload] = useState(0);
+  /**
+   * The run in flight: how many of its command had printed before it, and the
+   * tail as it read BEFORE the send. A run queued behind the fork's reply is not
+   * echoed yet, so the tail finds an older echo of the same command and would
+   * present its output as this run's — the baseline is what is ignored.
+   */
+  const [pending, setPending] = useState<
+    { command: string; head: string; baseline: number; before: string | null; queued: boolean } | null
+  >(null);
+  const [live, setLive] = useState<string[] | null>(null);
 
   // A successful poll is not evidence that your last action worked, so it does
   // not clear the banner — an action's own start does. Otherwise the refetch
   // these actions trigger would wipe their error before it could be read.
   useEffect(() => {
-    let live = true;
-    void get<AsideView>(`/api/agents/${paneId}/aside`)
-      .then((v) => { if (live) setView(v); })
-      .catch((e: Error) => { if (live) setFailed(e.message); });
-    return () => { live = false; };
-  }, [get, paneId, tick, reload]);
+    let alive = true;
+    void get<AsideView>(`/api/agents/${paneId}/${fork.path}`)
+      .then((v) => { if (alive) setView(v); })
+      .catch((e: Error) => { if (alive) setFailed(e.message); })
+      .finally(() => { if (alive) setLoaded(true); });
+    return () => { alive = false; };
+  }, [get, paneId, fork.path, tick, reload]);
+
+  const forkPane = view?.paneId ?? null;
+  const tail = useCallback(
+    (pane: string, head: string) =>
+      get<ShellTail>(`/api/agents/${pane}/shell?head=${encodeURIComponent(head)}`).then((t) => t.lines),
+    [get],
+  );
+
+  const landed = pending !== null && view !== null && runsOf(view.entries, pending.command) > pending.baseline;
+  useEffect(() => {
+    if (landed) { setPending(null); setLive(null); }
+  }, [landed]);
+
+  // While a run is pending the fork's pane is the only place its output exists,
+  // so it is tailed on every tick. Not before the fork has a pane: the first
+  // run is still starting it.
+  useEffect(() => {
+    if (!pending || pending.before === null || !forkPane) return;
+    let alive = true;
+    void tail(forkPane, pending.head)
+      .then((l) => { if (alive) setLive(JSON.stringify(l) === pending.before ? null : l); })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, [pending, forkPane, tail, tick]);
+
+  const start = async ({ code, language }: RunRequest): Promise<void> => {
+    const command = bashMode(code, language);
+    if (!command) return;
+    setBusy(true);
+    setFailed(null);
+    const head = command.split('\n')[0];
+    // No baseline for the run that starts the fork, so it is not tailed: the
+    // resumed conversation may redraw an older echo of this same command.
+    const before = forkPane ? JSON.stringify(await tail(forkPane, head).catch(() => null)) : null;
+    setPending({
+      command,
+      head,
+      baseline: runsOf(view?.entries ?? [], command),
+      before,
+      queued: view?.status === 'working',
+    });
+    try {
+      await post(`/api/agents/${paneId}/shell`, { code, language });
+    } catch (e) {
+      setFailed((e as Error).message);
+      setPending(null);
+    } finally {
+      setBusy(false);
+      setReload((n) => n + 1);
+    }
+  };
+
+  // One run at a time, taken once the view is in to count against. Waiting out
+  // `busy` is also what keeps two runs during the first one's ~10s start from
+  // forking twice under one name.
+  const next = runs?.queue[0];
+  const take = runs?.take;
+  useEffect(() => {
+    if (!next || !take || !loaded || busy || pending) return;
+    take();
+    void start(next);
+    // Not on `start`, which is rebuilt every render: the guards are what gate it.
+  }, [next, take, loaded, busy, pending]);
 
   const ask = async (): Promise<void> => {
     const question = text.trim();
     // The button is disabled while busy and the Enter key is not, and the first
     // question takes ~10s — long enough to type a second and fork twice.
     if (!question || busy) return;
-    setText('');
     setBusy(true);
     setFailed(null);
     try {
-      await post(`/api/agents/${paneId}/aside`, { text: question });
+      await post(`/api/agents/${paneId}/${fork.path}`, { text: question });
+      setText('');
     } catch (e) {
       setFailed((e as Error).message);
     } finally {
@@ -959,11 +1169,18 @@ function AsidePanel(
    * running, and there would be nothing left on screen to say so.
    */
   const drop = async (keepOpen: boolean): Promise<void> => {
+    // A post in flight may be starting this very fork; its `finally` would
+    // clear `busy` mid-close and let the next queued run start another.
+    if (busy) return;
     setBusy(true);
     setFailed(null);
     try {
-      await post(`/api/agents/${paneId}/aside/close`);
+      await post(`/api/agents/${paneId}/${fork.path}/close`);
       setView(null);
+      // Its baseline counted the old fork's runs, so it could never land in the
+      // next one — and the queue waits on it.
+      setPending(null);
+      setLive(null);
       if (!keepOpen) onClose();
     } catch (e) {
       setFailed((e as Error).message);
@@ -979,7 +1196,7 @@ function AsidePanel(
     <div className="flex h-full min-h-0 flex-col border-l border-neutral-800 text-xs">
       <div className="flex shrink-0 items-center gap-2 border-b border-neutral-800 px-2 py-1.5">
         {view?.status && <StatusDot agent={{ status: view.status, error: null }} />}
-        <span className="text-neutral-400">fork</span>
+        <span className="text-neutral-400">{fork.title}</span>
         {busy && <Spinner />}
         <div className="ml-auto flex gap-2">
           {open && (
@@ -991,9 +1208,12 @@ function AsidePanel(
               refork
             </button>
           )}
+          {/* Not while the first prompt is forking: shutting the panel would not
+              stop the start, and the fork would come up with nobody watching. */}
           <button
+            disabled={busy && !open}
             onClick={() => void (open ? drop(false) : onClose())}
-            className="text-neutral-500 hover:text-neutral-200"
+            className="text-neutral-500 hover:text-neutral-200 disabled:opacity-40"
             title={open ? 'Close the fork and end its agent' : 'Close'}
           >
             ×
@@ -1018,31 +1238,54 @@ function AsidePanel(
       {failed && <div className="shrink-0 bg-amber-900/30 px-2 py-1 text-amber-300">{failed}</div>}
 
       <div className="min-h-0 flex-1 overflow-y-auto px-2 py-1">
-        {view?.entries.length
-          ? view.entries.map((entry, i) => <EntryRow key={i} entry={entry} viewer={viewer} />)
-          : (
+        {view?.entries.map((entry, i) => (
+          <EntryRow key={i} entry={entry} viewer={viewer} runner={runs?.runner} />
+        ))}
+        {pending
+          ? (
+            <div className="my-2 rounded border border-neutral-800 bg-neutral-900/50 px-2 py-1.5">
+              <div className="truncate font-mono text-neutral-400">! {pending.head}</div>
+              {live && live.length > 0 && <Stream text={live.join('\n')} />}
+              <div className="flex items-center gap-2 text-[11px]">
+                <Spinner
+                  label={!open
+                    ? 'forking the session — a tab, a launch and a copy of the context, about 10s'
+                    : live ? 'running…' : pending.queued ? 'queued behind the fork’s reply…' : 'sent…'}
+                />
+                <button
+                  onClick={() => { setPending(null); setLive(null); }}
+                  title="Stop watching. The run itself is not stopped, and its output arrives here when it lands."
+                  className="ml-auto text-neutral-600 hover:text-neutral-300"
+                >
+                  ×
+                </button>
+              </div>
+            </div>
+          )
+          : !view?.entries.length && (
             <p className="py-2 text-neutral-600">
-              {busy && !open
-                ? 'forking the session — a tab, a launch and a copy of the context, about 10s'
-                : 'Ask about anything on the left. The question runs in a fork of this agent’s session, so its feed does not move.'}
+              {busy && !open ? 'forking the session — a tab, a launch and a copy of the context, about 10s' : fork.empty}
             </p>
           )}
       </div>
 
       <div className="flex shrink-0 gap-2 border-t border-neutral-800 p-2">
         <input
+          readOnly={busy}
           value={text}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter') void ask(); }}
-          placeholder="ask about this…"
-          className="min-w-0 flex-1 rounded border border-neutral-800 bg-neutral-900 px-2 py-1 text-neutral-200"
+          placeholder={fork.placeholder}
+          className={`min-w-0 flex-1 rounded border border-neutral-800 bg-neutral-900 px-2 py-1 ${
+            busy ? 'text-neutral-500' : 'text-neutral-200'
+          }`}
         />
         <button
           disabled={busy || !text.trim()}
           onClick={() => void ask()}
           className="rounded bg-neutral-800 px-2 py-1 text-neutral-200 disabled:opacity-40"
         >
-          ask
+          {fork.verb}
         </button>
       </div>
     </div>

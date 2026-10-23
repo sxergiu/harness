@@ -12,7 +12,7 @@ import { ExternalLink, Linkified, urlOf } from './links.js';
  * with nowhere to open a file into still renders — and threaded as a prop rather
  * than through a context, which this codebase has none of.
  *
- * `runner` makes a shell block runnable in the agent, threaded the same way and
+ * `runner` makes a shell block runnable in the run fork, threaded the same way and
  * for the same reason.
  */
 export function Markdown(

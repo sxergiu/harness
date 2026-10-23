@@ -7,9 +7,9 @@ import { Spinner } from './Status.js';
 import { useApi } from './useHarness.js';
 
 /**
- * A file the agent referenced, read from disk. Shares the right-hand split with
- * the fork panel and is shaped like it deliberately — the two are alternatives in
- * one slot, so they must not look like two different kinds of thing.
+ * A file the agent referenced, read from disk, one of a stack in the column beside
+ * the fork panel. Shaped like that panel deliberately — the two sit side by side,
+ * so they must not look like two different kinds of thing.
  *
  * Markdown renders as prose, because reading it is the point; everything else is
  * highlighted source. The `source` toggle exists for the one case where prose is

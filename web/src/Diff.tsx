@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { AgentDiff, DiffFile, DiffHunk, DiffLine, FileContent } from '@harness/shared';
+import type { FileViewer } from './fileRef.js';
 import { highlight } from './highlight.js';
 import { Spinner } from './Status.js';
 import { useApi } from './useHarness.js';
@@ -43,7 +44,9 @@ function baseName(relPath: string): string {
   return relPath.slice(relPath.lastIndexOf('/') + 1);
 }
 
-export function DiffTab({ paneId, tick }: { paneId: string; tick: number }): React.ReactElement {
+export function DiffTab(
+  { paneId, tick, viewer }: { paneId: string; tick: number; viewer: FileViewer },
+): React.ReactElement {
   const { get } = useApi();
   const [diff, setDiff] = useState<AgentDiff | null>(null);
   const [mode, setMode] = useState<'unified' | 'split'>('unified');
@@ -168,7 +171,7 @@ export function DiffTab({ paneId, tick }: { paneId: string; tick: number }): Rea
       </nav>
 
       <div className="min-w-0 flex-1 overflow-auto">
-        <FileDiff paneId={paneId} file={current} mode={mode} />
+        <FileDiff paneId={paneId} file={current} mode={mode} viewer={viewer} />
       </div>
       </div>
     </div>
@@ -227,7 +230,12 @@ function CopyFile({ paneId, file }: { paneId: string; file: DiffFile }): React.R
 }
 
 function FileDiff(
-  { paneId, file, mode }: { paneId: string; file: DiffFile; mode: 'unified' | 'split' },
+  { paneId, file, mode, viewer }: {
+    paneId: string;
+    file: DiffFile;
+    mode: 'unified' | 'split';
+    viewer: FileViewer;
+  },
 ): React.ReactElement {
   return (
     <section>
@@ -249,8 +257,21 @@ function FileDiff(
           <span className="text-emerald-400">+{file.additions}</span>
           <span className="ml-1 text-red-400">−{file.deletions}</span>
         </span>
-        {/* Nothing on disk to copy for a file that is gone. */}
-        {file.kind !== 'missing' && <CopyFile key={file.path} paneId={paneId} file={file} />}
+        {/* Nothing on disk to view or copy for a file that is gone. `relPath`
+            rather than `path` so the panel is keyed the same as when the feed
+            opens this file. */}
+        {file.kind !== 'missing' && (
+          <>
+            <button
+              onClick={() => viewer.open(file.relPath)}
+              className="shrink-0 text-[11px] text-neutral-500 hover:text-neutral-200"
+              title="Open this file as it is on disk now, beside the diff"
+            >
+              view
+            </button>
+            <CopyFile key={file.path} paneId={paneId} file={file} />
+          </>
+        )}
       </div>
 
       {file.note ? (

@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import type { FeedEntry, FeedPage, FeedTurn, ShellTail } from '@harness/shared';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import type { FeedEntry, FeedPage, FeedTurn } from '@harness/shared';
 import { CodeBlock, ShellOutput, type ShellRunner } from './CodeBlock.js';
 import type { FileViewer } from './fileRef.js';
 import { Linkified } from './links.js';
@@ -18,19 +18,19 @@ import { useApi } from './useHarness.js';
  * The feed owns what that means, because it is the only thing here that knows
  * which entry the human last typed.
  *
- * `agent` is what makes the prose's shell blocks runnable. Absent for an agent
- * that has ended, where there is nobody left to run them.
+ * `runner` is what makes the prose's shell blocks runnable, in the run fork.
+ * Absent for an agent that has ended, where there is no session left to fork.
  */
 export function Feed(
-  { paneId, tick, jump, viewer, agent }: {
+  { paneId, tick, jump, viewer, runner }: {
     paneId: string;
     tick: number;
     jump: number;
     viewer?: FileViewer;
-    agent?: { name: string; working: boolean };
+    runner?: ShellRunner;
   },
 ): React.ReactElement {
-  const { get, post } = useApi();
+  const { get } = useApi();
   const [turns, setTurns] = useState<FeedTurn[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
@@ -173,29 +173,6 @@ export function Feed(
     if (moved && !first) spotlight();
   }, [latestKey, spotlight]);
 
-  const name = agent?.name;
-  const working = agent?.working ?? false;
-  const tail = useCallback(
-    (head: string) =>
-      get<ShellTail>(`/api/agents/${paneId}/shell?head=${encodeURIComponent(head)}`).then((t) => t.lines),
-    [get, paneId],
-  );
-  /**
-   * Rebuilt with the turns, so a block sees a run land on the same refetch that
-   * brings it. The feed always holds the newest turn, which is what makes
-   * `newest` the turn a run started now must come after.
-   */
-  const runner = useMemo<Omit<ShellRunner, 'since'> | undefined>(() => name === undefined ? undefined : {
-    agent: name,
-    working,
-    tick,
-    newest: turns[turns.length - 1]?.index ?? -1,
-    run: async (code, language) => { await post(`/api/agents/${paneId}/shell`, { code, language }); },
-    tail,
-    runs: (command) => turns.flatMap((t) => t.entries.flatMap((e) =>
-      e.kind === 'shell' && e.command === command ? [{ turn: t.index, run: e }] : [])),
-  }, [name, working, tick, turns, paneId, post, tail]);
-
   // Three different nothings, which the panel used to report as one.
   if (turns.length === 0) {
     if (!loaded) return <div className="p-4 text-xs"><Spinner label="reading transcript…" /></div>;
@@ -245,14 +222,14 @@ export function Feed(
                         : 'bg-transparent text-xs'
                     }`}
                   >
-                    <EntryRow entry={e} viewer={viewer} runner={runner && { ...runner, since: t.index }} />
+                    <EntryRow entry={e} viewer={viewer} runner={runner} />
                   </div>
                 )
                 : <EntryRow
                   key={i}
                   entry={e}
                   viewer={viewer}
-                  runner={runner && { ...runner, since: t.index }}
+                  runner={runner}
                 />
             )}
           </div>

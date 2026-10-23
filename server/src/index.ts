@@ -13,7 +13,7 @@ import {
   type ServerEvent, type SettingsView, type ShellTail, type SubagentsView, type UsageView,
 } from '@harness/shared';
 import { Account } from './account.js';
-import { Aside } from './aside.js';
+import { ASIDE_FORK, Aside, RUN_FORK } from './aside.js';
 import { Board } from './board.js';
 import { autoAcceptEnabled, setAutoAccept } from './chrome.js';
 import {
@@ -269,9 +269,13 @@ const herdr = new Herdr(
  * Side conversations, forked off an agent's session. Constructed before the
  * board because the board tells it when a session ends — by the pane closing or
  * by `/clear` — and a fork of a conversation that is gone has nothing to answer
- * out of.
+ * out of. Two per agent at most: the aside it is asked questions in, and the
+ * run fork its ▶ runs go to.
  */
-const asides = new Aside(herdr);
+const asides = new Aside(herdr, ASIDE_FORK);
+const runs = new Aside(herdr, RUN_FORK);
+/** The route segment each fork is served under. Same routes, so one loop each. */
+const FORKS = [['aside', asides], ['run', runs]] as const;
 
 const board = new Board(
   herdr,
@@ -282,7 +286,7 @@ const board = new Board(
     broadcast({ type: 'agents', agents: board.agents(), workspaces: board.workspaceRows() });
     broadcast({ type: 'recent', recent: board.recent() });
   },
-  (paneId) => void asides.close(paneId).catch(() => {}),
+  (paneId) => { for (const [, fork] of FORKS) void fork.close(paneId).catch(() => {}); },
 );
 
 /**
@@ -363,22 +367,24 @@ app.get<{ Params: { paneId: string } }>('/api/agents/:paneId/subagents', async (
 });
 
 /**
- * This agent's aside, if it has one. The parent's own entries go in because the
- * aside's exchange is defined against them — the fork's transcript holds the
- * parent's whole conversation, and only the parent can say which part of it is
- * inherited.
+ * This agent's aside or run fork, if it has one. The parent's own entries go in
+ * because the fork's exchange is defined against them — the fork's transcript
+ * holds the parent's whole conversation, and only the parent can say which part
+ * of it is inherited.
  */
-app.get<{ Params: { paneId: string } }>('/api/agents/:paneId/aside', async (req, reply) => {
-  const row = board.row(req.params.paneId);
-  if (!row) return reply.code(404).send({ error: 'no such agent' });
+for (const [path, fork] of FORKS) {
+  app.get<{ Params: { paneId: string } }>(`/api/agents/:paneId/${path}`, async (req, reply) => {
+    const row = board.row(req.params.paneId);
+    if (!row) return reply.code(404).send({ error: 'no such agent' });
 
-  try {
-    const view: AsideView = await asides.view(row, board.entries(req.params.paneId));
-    return view;
-  } catch (err) {
-    return reply.code(503).send({ error: (err as Error).message });
-  }
-});
+    try {
+      const view: AsideView = await fork.view(row, board.entries(req.params.paneId));
+      return view;
+    } catch (err) {
+      return reply.code(503).send({ error: (err as Error).message });
+    }
+  });
+}
 
 app.get<{ Params: { paneId: string } }>('/api/agents/:paneId/diff', async (req, reply) => {
   const row = board.row(req.params.paneId);
@@ -435,9 +441,10 @@ app.get<{ Params: { paneId: string } }>('/api/agents/:paneId/blocked', async (re
 });
 
 /**
- * What a bash-mode run is printing while it runs, for the box that started it.
- * The WHOLE visible pane, for `prompt`'s reason: a long output pushes the echo
- * up past any fixed window.
+ * What a bash-mode run is printing while it runs, for the panel that started
+ * it — asked of the run fork's pane, which is not a board row, so this looks
+ * up none. The WHOLE visible pane, for `prompt`'s reason: a long output pushes
+ * the echo up past any fixed window.
  */
 app.get<{ Params: { paneId: string }; Querystring: { head?: string } }>(
   '/api/agents/:paneId/shell',
@@ -477,20 +484,24 @@ app.post<{ Params: { paneId: string }; Body: { text?: string } }>(
 );
 
 /**
- * Runs a fenced block from the agent's prose through Claude Code's bash mode,
- * so the output lands in the agent's own context and transcript. The block
- * arrives as written and is turned into the `!` line here — the browser cannot
- * have anything typed that `bashMode` would not have produced.
+ * Runs a fenced block through Claude Code's bash mode in this agent's RUN FORK,
+ * starting one if there is none — so the output and the fork's reading of it
+ * land in the fork's transcript and never in the agent's, and the first run
+ * costs a fork start of ~10s. The block arrives as written and is turned into
+ * the `!` line here — the browser cannot have anything typed that `bashMode`
+ * would not have produced.
  */
 app.post<{ Params: { paneId: string }; Body: { code?: unknown; language?: unknown } }>(
   '/api/agents/:paneId/shell',
   async (req, reply) => {
+    const row = board.row(req.params.paneId);
+    if (!row) return reply.code(404).send({ error: 'no such agent' });
     const { code, language } = req.body ?? {};
     const command = typeof code === 'string'
       ? bashMode(code, typeof language === 'string' ? language : null)
       : null;
     if (!command) return reply.code(400).send({ error: 'not a runnable shell block' });
-    return act(reply, () => herdr.prompt(req.params.paneId, `! ${command}`));
+    return act(reply, () => runs.send(row, board.entries(req.params.paneId), `! ${command}`));
   },
 );
 
@@ -551,30 +562,32 @@ app.post<{ Params: { paneId: string }; Body: { level?: string } }>(
   },
 );
 
-/**
- * Asks the aside, forking one off this agent's session if there is none yet.
- * The first question is slow — a tab, a launch, and Claude Code loading a forked
- * transcript — so the browser says so rather than looking hung.
- */
-app.post<{ Params: { paneId: string }; Body: { text?: string } }>(
-  '/api/agents/:paneId/aside',
-  async (req, reply) => {
-    const row = board.row(req.params.paneId);
-    if (!row) return reply.code(404).send({ error: 'no such agent' });
-    const text = req.body?.text?.trim();
-    if (!text) return reply.code(400).send({ error: 'text is required' });
+for (const [path, fork] of FORKS) {
+  /**
+   * Prompts the fork, forking one off this agent's session if there is none
+   * yet. The first prompt is slow — a tab, a launch, and Claude Code loading a
+   * forked transcript — so the browser says so rather than looking hung.
+   */
+  app.post<{ Params: { paneId: string }; Body: { text?: string } }>(
+    `/api/agents/:paneId/${path}`,
+    async (req, reply) => {
+      const row = board.row(req.params.paneId);
+      if (!row) return reply.code(404).send({ error: 'no such agent' });
+      const text = req.body?.text?.trim();
+      if (!text) return reply.code(400).send({ error: 'text is required' });
 
-    return act(reply, () => asides.send(row, board.entries(req.params.paneId), text));
-  },
-);
+      return act(reply, () => fork.send(row, board.entries(req.params.paneId), text));
+    },
+  );
 
-/**
- * Ends the aside. Also how you refork one: with no aside left, the next question
- * takes a fresh copy of wherever the parent has got to since.
- */
-app.post<{ Params: { paneId: string } }>('/api/agents/:paneId/aside/close', async (req, reply) =>
-  act(reply, () => asides.close(req.params.paneId)),
-);
+  /**
+   * Ends the fork. Also how you refork one: with no fork left, the next prompt
+   * takes a fresh copy of wherever the parent has got to since.
+   */
+  app.post<{ Params: { paneId: string } }>(`/api/agents/:paneId/${path}/close`, async (req, reply) =>
+    act(reply, () => fork.close(req.params.paneId)),
+  );
+}
 
 /**
  * Unblocking is optimistic by design: we send the keystroke without knowing
@@ -1329,8 +1342,9 @@ let shuttingDown = false;
  *
  * The usage agent is the one pane here that is purely ours — no conversation,
  * no work, nothing a human would go back to — so it closes with the cockpit
- * rather than outliving it. Asides deliberately do not: each holds an exchange
- * the human opened, and one is found again by name when the harness comes back.
+ * rather than outliving it. Asides and run forks deliberately do not: each holds
+ * an exchange the human opened, and one is found again by name when the harness
+ * comes back.
  * A pending login pane is aside-shaped for the same reason and is likewise left
  * alone: it may be half-finished in the browser, and closing it would leave
  * somebody logged out of everything with the way back gone.

@@ -31,6 +31,7 @@ import {
 } from './instance.js';
 import { admits } from './origin.js';
 import { Projects } from './projects.js';
+import { Shades } from './shades.js';
 import {
   modelDefault, resumeArgs, rulesAreDefault, rulesText, setModelDefault, setRules, startArgs,
 } from './rules.js';
@@ -240,6 +241,8 @@ function broadcast(event: ServerEvent): void {
 const history = new History();
 /** What the human has delegated, per checkout. Keyed on a path, so it persists. */
 const projects = new Projects();
+/** Row tints, keyed on a pane id and kept across restarts — see `shades.ts`. */
+const shades = new Shades();
 let herdrError: string | undefined;
 
 // `board` is captured, not called, at construction time — both callbacks fire
@@ -274,6 +277,7 @@ const board = new Board(
   herdr,
   history,
   projects,
+  shades,
   () => {
     broadcast({ type: 'agents', agents: board.agents(), workspaces: board.workspaceRows() });
     broadcast({ type: 'recent', recent: board.recent() });
@@ -928,8 +932,8 @@ app.post<{ Params: { paneId: string }; Body: { shade?: unknown } }>(
       return reply.code(400).send({ error: `shade must be null or one of ${AGENT_SHADES.join(', ')}` });
     }
     // A closed agent is a 404 here, not merely a no-op: `row()` answers out of
-    // RECENT too, and a shade remembered against a dead pane would come back on
-    // whatever agent inherits its id.
+    // RECENT too, and a shade set on a closed row would tint nothing now and
+    // whatever agent inherits its id later.
     if (!board.row(req.params.paneId)?.live) {
       return reply.code(404).send({ error: 'no such agent' });
     }

@@ -674,13 +674,18 @@ foot of the board because that is where the bars that prompt it are.
   because the seed is kept for the life of the space: a coin flip is not a wrong dir for one
   heartbeat but a wrong dir until somebody notices, and the space simply has no dir until
   the human types one — which `POST /api/workspaces/:id/agents` already refuses without.
-- **A row's shade and its locked slot are ours, and in memory only** — the same reasoning as
-  the directory above, keyed on a pane id rather than a workspace id. Both are pruned when
-  the pane goes, beside `forked`, and both are legitimately empty after a restart like
-  `stateSince`. **Applied in `agents()`, never in `resync`:** `history.remember` writes a row
+- **A row's shade and its locked slot are ours.** The lock is in memory only — the same
+  reasoning as the directory above, keyed on a pane id rather than a workspace id — pruned
+  when the pane goes, beside `forked`, and legitimately empty after a restart like
+  `stateSince`. **The shade persists**, in `~/.harness/shades.json` (`shades.ts`), keyed on
+  the pane id by the human's choice: a recycled id may come back wearing an old colour, which
+  is accepted because a tint claims nothing. It is deliberately NOT pruned with the pane — a
+  Herdr restart looks exactly like every pane going — and is bounded at 100, most recently
+  set first. **Applied in `agents()`, never in `resync`:** `history.remember` writes a row
   straight out of `this.rows` to `~/.harness/recent.json`, so either held on the row would
-  persist against a pane id Herdr recycles and reappear on whoever inherits it. Kept off the
-  row, RECENT carries neither by construction and `history.ts` knows nothing about them.
+  persist against a pane id Herdr recycles and reappear on whoever inherits it — closed rows
+  included, which `shades.json` never tints. Kept off the row, RECENT carries neither by
+  construction and `history.ts` knows nothing about them.
   **A shade is set by right-clicking the row**, which steps to the next of `AGENT_SHADES` and
   off the end back to none — the array IS the queue, and the browser computes the next value,
   so the route takes a shade rather than a "cycle". They are **distinct hues, not steps of one
@@ -843,7 +848,7 @@ foot of the board because that is where the bars that prompt it are.
   to say about an agent somebody started themselves. Each is a fact about something narrower
   than the last, and every one still has to survive the family check — a known alias is not
   privileged, or the cockpit's own `--model` becomes a way to widen any window on the board.
-  Both maps are in memory and dropped with the pane, for the shade's reason; after a restart
+  Both maps are in memory and dropped with the pane, because Herdr recycles pane ids; after a restart
   the meter falls back to the default and the peak-widening recovers the rest. `startArgs`
   therefore takes the alias from its caller rather than reading the file itself: two reads are
   free to disagree, and the pane would then be remembered as running what it was never given.
@@ -1173,13 +1178,14 @@ nested copies had not — and reading `npm ls` alone would have called a live ad
 allow. `nanoid` is the same shape and is dev-only — it arrives through `vite` → `postcss` and
 `files` ships `dist` alone, so it never reaches a consumer.
 
-**Both stored files are versioned, and they disagree about what to do with a file they
+**The stored files are versioned, and they disagree about what to do with a file they
 cannot read — deliberately.** `projects.json` DISCARDS anything unrecognised, because the
 cost of dropping a grant is re-ticking a box and the cost of misreading one is an agent
 committing where it was never allowed to. `recent.json` MIGRATES its pre-version bare array
 and drops only rows missing `paneId` or `name`, because it is a cache and the worst a
-misread does is show a stale row. Do not make them consistent with each other; the
-asymmetry is the reasoning.
+misread does is show a stale row. `shades.json` takes `recent.json`'s side and drops only
+entries it cannot read: nothing is authorized by it, and a misread costs one wrong tint.
+Do not make them consistent with one another; the asymmetry is the reasoning.
 
 **`~/.harness/harness.log` is always on and never on stdout.** `logger: false` still stands
 — Fastify is given no logger, and the terminal is as quiet as it was. `log.ts` takes the

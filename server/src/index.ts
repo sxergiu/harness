@@ -1,6 +1,6 @@
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import fastifyStatic from '@fastify/static';
@@ -31,6 +31,7 @@ import {
   HEALTH_PATH, claim, openBrowser, pageOf, release, running, shouldOpen, urlFor, type Health,
 } from './instance.js';
 import { admits } from './origin.js';
+import { cancelPick, pickDir, picking } from './picker.js';
 import { Projects } from './projects.js';
 import { Shades } from './shades.js';
 import {
@@ -891,12 +892,53 @@ app.post<{ Params: { paneId: string } }>('/api/agents/:paneId/resume', async (re
   }
 });
 
-app.post<{ Body: { label?: string } }>('/api/workspaces', async (req, reply) =>
-  act(reply, async () => {
-    await herdr.request('workspace.create', req.body?.label ? { label: req.body.label } : {});
+/**
+ * A space created from a picked folder is named after it and holds it from the
+ * start. `cwd` goes to Herdr as well as the pin: a resync whose snapshot was
+ * answered before this create prunes the pin, and the root shell sitting in
+ * `dir` is then what `seedCwd` re-seeds it from.
+ */
+app.post<{ Body: { label?: string; dir?: string } }>('/api/workspaces', async (req, reply) => {
+  let dir: string | undefined;
+  if (req.body?.dir !== undefined) {
+    const d = spaceDirOf(req.body.dir);
+    if ('error' in d) return reply.code(400).send(d);
+    dir = d.dir;
+  }
+  // Empty for a drive root, which leaves the name to Herdr.
+  const label = req.body?.label || (dir ? basename(dir) : '');
+  return act(reply, async () => {
+    const r = await herdr.request<{ workspace: { workspace_id: string } }>('workspace.create', {
+      ...(label ? { label } : {}),
+      ...(dir ? { cwd: dir } : {}),
+    });
+    if (dir) board.setSpaceDir(r.workspace.workspace_id, dir);
     board.schedule();
-  }),
-);
+  });
+});
+
+/**
+ * The OS folder dialog — see `picker.ts`. Blocks until the human answers, and
+ * null is a cancel rather than an error. One at a time, because a second would
+ * open behind the first.
+ */
+app.post('/api/pick-dir', async (_req, reply) => {
+  if (picking()) {
+    return reply.code(409).send({ error: 'a folder dialog is already open — it may be behind this window' });
+  }
+  // A tab closed with the dialog up would otherwise leave it answering nobody,
+  // and every later browse refused with the 409 above. The response's close,
+  // not the request's: that one fires as soon as the body has been read.
+  reply.raw.on('close', () => {
+    if (!reply.raw.writableFinished) cancelPick();
+  });
+  try {
+    return { dir: await pickDir() };
+  } catch (err) {
+    logError('folder dialog failed', err);
+    return reply.code(503).send({ error: (err as Error).message });
+  }
+});
 
 app.post<{ Params: { id: string }; Body: { label?: string } }>(
   '/api/workspaces/:id/rename',
@@ -913,7 +955,17 @@ app.post<{ Params: { id: string }; Body: { label?: string } }>(
 /**
  * The dir is ours, not Herdr's, so it is checked here — a path that does not
  * exist would otherwise fail much later, inside `tab.create`.
- *
+ */
+function spaceDirOf(raw: string | undefined): { dir: string } | { error: string } {
+  const dir = raw?.trim();
+  if (!dir) return { error: 'dir is required' };
+  const resolved = dir.startsWith('~') ? join(homedir(), dir.slice(1)) : dir;
+  return statSync(resolved, { throwIfNoEntry: false })?.isDirectory()
+    ? { dir: resolved }
+    : { error: `not a directory: ${resolved}` };
+}
+
+/**
  * The git grant rides along rather than taking a route of its own: it is a
  * second fact about the same resolved path, and this is the only place that
  * already turns what the human typed into one.
@@ -921,14 +973,10 @@ app.post<{ Params: { id: string }; Body: { label?: string } }>(
 app.post<{ Params: { id: string }; Body: { dir?: string; gitDelegated?: boolean } }>(
   '/api/workspaces/:id/dir',
   async (req, reply) => {
-    const dir = req.body?.dir?.trim();
-    if (!dir) return reply.code(400).send({ error: 'dir is required' });
     if (!board.workspace(req.params.id)) return reply.code(404).send({ error: 'no such space' });
-
-    const resolved = dir.startsWith('~') ? join(homedir(), dir.slice(1)) : dir;
-    if (!statSync(resolved, { throwIfNoEntry: false })?.isDirectory()) {
-      return reply.code(400).send({ error: `not a directory: ${resolved}` });
-    }
+    const d = spaceDirOf(req.body?.dir);
+    if ('error' in d) return reply.code(400).send(d);
+    const resolved = d.dir;
     if (typeof req.body?.gitDelegated === 'boolean') {
       projects.setGitDelegated(resolved, req.body.gitDelegated);
       // Not just this space: the grant is on the checkout, so every space
@@ -1391,6 +1439,8 @@ function shutdown(cause: string): void {
   shuttingDown = true;
   log(`shutting down on ${cause}`);
   release();
+  // `app.close()` waits on requests in flight, and an open dialog is one.
+  cancelPick();
   void Promise.race([
     Promise.all([
       usage.close().catch(() => {}), ping.close().catch(() => {}), summaries.close().catch(() => {}),

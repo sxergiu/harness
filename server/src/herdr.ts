@@ -240,7 +240,9 @@ export function returnedToShell(pane: string): boolean {
 function cli(args: string[]): string | null {
   try {
     return execFileSync('herdr', args, {
-      encoding: 'utf8', timeout: 3_000, stdio: ['ignore', 'pipe', 'ignore'],
+      // A harness restarted by an update is detached and has no console, so
+      // without this every call opens a window of its own on Windows.
+      encoding: 'utf8', timeout: 3_000, stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true,
     }).trim();
   } catch {
     return null;

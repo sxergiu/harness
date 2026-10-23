@@ -190,6 +190,13 @@ place to reach a checkout whose space has since gone.
 `⚙` beside `SPACES` opens one screen for everything about the install rather than the
 session:
 
+- **The header** shows the version running and asks npm whether a newer one is out. When
+  the harness is the global `npm install -g` copy, `update` installs it and restarts the
+  cockpit into it, and the open tabs reload by themselves. Agents keep running. The
+  restarted cockpit runs in the background, so it no longer belongs to the terminal you
+  started it from: `harness stop` ends it. Run from a checkout, it only tells you an update
+  exists. If npm is refused permission, the error names the command to run yourself.
+
 - **RULES** — the whole system prompt every started agent gets, editable, saved to
   `~/.harness/rules.md`. `reset to default` drops the file rather than writing today's
   defaults into it, so a reset keeps following later versions. Applies to agents started

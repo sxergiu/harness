@@ -34,6 +34,12 @@ export function useHarness(): HarnessState & { tick: number } {
     let closed = false;
     /** Held here as well as in state, because `onclose` is what has to read it. */
     let quit = false;
+    /**
+     * The version the first `hello` came from. A later one that differs is an
+     * update having restarted the server under this tab, whose script is now
+     * the old page against the new API — reloading fetches the new one.
+     */
+    let version: string | null | undefined;
     let retry: ReturnType<typeof setTimeout>;
 
     const connect = (): void => {
@@ -51,6 +57,13 @@ export function useHarness(): HarnessState & { tick: number } {
 
       sock.onmessage = (ev) => {
         const e = JSON.parse(ev.data as string) as ServerEvent;
+        if (e.type === 'hello') {
+          if (version !== undefined && e.version !== version) {
+            location.reload();
+            return;
+          }
+          version = e.version;
+        }
         if (e.type === 'quit') {
           quit = true;
           // The tab closes ITSELF, because nothing else can: `openBrowser`

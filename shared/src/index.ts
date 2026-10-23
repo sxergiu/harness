@@ -742,6 +742,20 @@ export interface PermissionsState {
   overridden: string[];
 }
 
+/**
+ * Asked of the npm registry on its own route, so an offline machine costs the
+ * settings screen this line and nothing else.
+ */
+export interface UpdateView {
+  /** Null when the registry did not answer; `error` says why. */
+  latest: string | null;
+  /** `latest` is newer than the version running. */
+  available: boolean;
+  /** This process is the global npm install, so `npm install -g` replaces it. */
+  updatable: boolean;
+  error?: string;
+}
+
 export interface SettingsView {
   /**
    * The harness version this process started as, off the package manifest a
@@ -812,6 +826,8 @@ export type ServerEvent =
       agents: AgentRow[];
       recent: AgentRow[];
       herdrConnected: boolean;
+      /** The harness version serving this socket. A tab that reconnects to a different one reloads. */
+      version: string | null;
     }
   /**
    * Whole-list replace, and the only thing that says "something moved". The

@@ -442,6 +442,11 @@ server/src/
                       and the run fork its ▶ runs go to
   notify.ts           osascript + afplay, plus a Herdr toast
   instance.ts         the single-instance lock, and where to point the browser
+  update.ts           npm's latest version, and installing it over a GLOBAL install
+                      only. The route restarts into it, spawning the successor
+                      after the port is closed and the lock released — any earlier
+                      and it defers to us (invariant 15). Tabs reload on a `hello`
+                      whose version differs from their first
   origin.ts           who may talk to an unauthenticated server. THE security boundary
   picker.ts           the OS folder dialog a space's directory is chosen with, opened
                       by this process since a page never learns an absolute path.
@@ -652,7 +657,9 @@ foot of the board because that is where the bars that prompt it are.
 - **The email reaches a SHELL COMMAND LINE**, since `launchCommand` has no argv to hand it
   to, so it is checked against the shape of an address and dropped rather than quoted if it
   is anything else. Every address comes out of `claude auth status`, so this is not expected
-  to fire; it is the one place a string from another process reaches a shell.
+  to fire. It is one of two places a string from another process reaches a shell; the
+  other is the registry's version in the self-update's `npm install` on Windows, which is
+  held to an anchored semver pattern for the same reason.
 - **`available: false` is not `current: null`.** The first is a `claude` that did not
   answer — not on PATH, or an output this cannot read — and the second is nobody signed in.
   Conflating them reports "signed out" about a machine that is signed in.

@@ -1,4 +1,5 @@
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { spawn } from 'node:child_process';
+import { existsSync, openSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -10,7 +11,7 @@ import {
   AGENT_SHADES, BIND_HOST, DEFAULT_PORT, DEV_PAGE_PORT, EFFORTS, MODELS, WS_PATH, bashMode,
   type AccountView, type AgentDiff, type AgentShade, type AsideView, type BlockedView,
   type FeedEntry, type FeedPage, type FileCandidates, type FileContent, type HerdrRuleState, type PermissionsState,
-  type ServerEvent, type SettingsView, type ShellTail, type SubagentsView, type SummaryView,
+  type ServerEvent, type SettingsView, type ShellTail, type SubagentsView, type SummaryView, type UpdateView,
   type UsageView,
 } from '@harness/shared';
 import { Account } from './account.js';
@@ -40,6 +41,7 @@ import {
 import { Ping } from './ping.js';
 import { Summaries } from './summary.js';
 import { Transcripts, feedTurns, subagentPathFor, subagentRows } from './transcript.js';
+import { install, isNewer, latestVersion, updatable } from './update.js';
 import { Usage } from './usage.js';
 
 // ---------------------------------------------------------------------------
@@ -200,6 +202,13 @@ function packageVersion(): string | null {
   }
   return null;
 }
+
+/**
+ * The directory above `dist/` when built, which is the package root `npm
+ * install -g` replaces; `server/` when not, which no install ever matches.
+ * Realpath'd because that is what `updatable` compares it against.
+ */
+const packageRoot = realpathSync(fileURLToPath(new URL('..', import.meta.url)));
 
 /**
  * Transport only. Herdr owns the session, the transcripts own the content, and
@@ -1218,6 +1227,94 @@ app.post('/api/settings/permissions', async (_req, reply) => {
   }
 });
 
+/** Never throws: an unreachable registry is a line on the screen, not a broken one. */
+app.get('/api/update', async (): Promise<UpdateView> => {
+  const [latest, canUpdate] = await Promise.all([
+    latestVersion().then((v) => ({ v }), (err: Error) => ({ v: null, error: err.message })),
+    updatable(packageRoot),
+  ]);
+  return {
+    latest: latest.v,
+    available: isNewer(latest.v, runningVersion),
+    updatable: canUpdate,
+    ...('error' in latest ? { error: latest.error } : {}),
+  };
+});
+
+let updating = false;
+
+/**
+ * Installs the newest version over this one and restarts into it. The version
+ * is asked of the registry again here and never taken from the browser: it ends
+ * up on a shell command line.
+ *
+ * What npm wrote is read back off the manifest before anything restarts, so a
+ * `.npmrc` registry that answered differently, or an install that landed
+ * somewhere else, leaves this cockpit running rather than restarting into the
+ * code it already is.
+ */
+app.post('/api/update', async (_req, reply) => {
+  if (!(await updatable(packageRoot))) {
+    return reply.code(409).send({
+      error: 'this harness is not the global npm install — update its checkout instead (git pull, npm run build)',
+    });
+  }
+  if (updating) return reply.code(409).send({ error: 'an update is already running' });
+  updating = true;
+  try {
+    const latest = await latestVersion();
+    if (!isNewer(latest, runningVersion)) throw new Error(`already at ${runningVersion}`);
+    await install(latest);
+    const landed = packageVersion();
+    if (landed !== latest) {
+      throw new Error(`npm finished but ${packageRoot} holds ${landed ?? 'no version'}, not ${latest} — not restarting`);
+    }
+    log(`updated ${runningVersion} → ${latest}`);
+    // Not `quit`: that closes the tabs, and these are meant to reconnect to
+    // the successor and reload into its page.
+    setImmediate(() => shutdown(`update to ${latest}`, () => restartAs(latest)));
+    return { ok: true, version: latest };
+  } catch (err) {
+    updating = false;
+    logError('update failed', err);
+    return reply.code(500).send({ error: (err as Error).message });
+  }
+});
+
+/**
+ * The new code is at this same path once npm is done, so it is run with this
+ * same node — no PATH lookup, no `.cmd` shim, no `cmd.exe`. Called only after
+ * the port is closed and the lock released: started any earlier, the successor
+ * probes a harness that still answers and defers to it (invariant 15), or binds
+ * a port that is still held. `--no-open` because the tabs are already open and
+ * reconnecting; an opened one is the pile-up invariant 15 records.
+ *
+ * Detached, so the terminal this was started from no longer owns it and ctrl-C
+ * there ends nothing — which is what the line says.
+ */
+function restartAs(version: string): void {
+  // The successor's stderr is the only account of a start that never got as
+  // far as `harness.log`, which a successful start truncates anyway: an import
+  // that throws dies before any handler of ours exists.
+  let stderr: number | 'ignore' = 'ignore';
+  try {
+    stderr = openSync(RESTART_LOG, 'w');
+  } catch { /* an unwritable home costs the trace, never the restart */ }
+  const child = spawn(
+    process.execPath,
+    [fileURLToPath(import.meta.url), '--port', String(port), '--no-open'],
+    { detached: true, stdio: ['ignore', 'ignore', stderr], windowsHide: true },
+  );
+  child.unref();
+  // A spawn that failed reports it as an `error` event this process exits
+  // before hearing; a missing pid is the only trace there is time to read.
+  const line = child.pid === undefined
+    ? `updated to v${version}, but the restart did not start — run \`harness\` to start it`
+    : `updated to v${version}, restarted in the background as pid ${child.pid} — \`harness stop\` ends it`;
+  console.log(`[harness] ${line}`);
+  log(line);
+}
+
 // ---------------------------------------------------------------------------
 // The page itself
 // ---------------------------------------------------------------------------
@@ -1289,6 +1386,7 @@ wss.on('connection', (ws: WebSocket) => {
     agents: board.agents(),
     recent: board.recent(),
     herdrConnected: herdr.connected,
+    version: runningVersion,
   };
   ws.send(JSON.stringify(hello));
   // `hello` carries only whether Herdr is up; anything to SAY about it — down,
@@ -1418,6 +1516,17 @@ if (built) {
  */
 const CLEANUP_MS = 2_000;
 
+/**
+ * How long `app.close()` may wait on connections before they are cut. The lock
+ * is already released by then, so a close that never resolved used to mean no
+ * restart and no harness, with nothing on screen to say so. The port itself is
+ * free the moment `close` is called; only the stragglers are waited on.
+ */
+const CLOSE_MS = 3_000;
+
+/** Where a restarted harness's stderr goes — see `restartAs`. */
+const RESTART_LOG = join(homedir(), '.harness', 'restart.log');
+
 let shuttingDown = false;
 
 /**
@@ -1434,7 +1543,7 @@ let shuttingDown = false;
  * alone: it may be half-finished in the browser, and closing it would leave
  * somebody logged out of everything with the way back gone.
  */
-function shutdown(cause: string): void {
+function shutdown(cause: string, then?: () => void): void {
   if (shuttingDown) return;
   shuttingDown = true;
   log(`shutting down on ${cause}`);
@@ -1448,14 +1557,31 @@ function shutdown(cause: string): void {
     new Promise((r) => setTimeout(r, CLEANUP_MS)),
   ]).then(() => {
     herdr.stop();
-    void app.close().then(() => process.exit(0));
+    // An upgraded socket is not a connection `app.close()` can end, and it
+    // waits on it: measured, with one tab connected it never resolved. Tabs
+    // told `quit` close themselves first, which is why the ⏻ never hit it.
+    for (const c of clients) c.terminate();
+    const closed = app.close();
+    const cut = setTimeout(() => app.server.closeAllConnections(), CLOSE_MS);
+    void closed.then(() => {
+      clearTimeout(cut);
+      try {
+        then?.();
+      } catch (err) {
+        logError(`after shutting down on ${cause}`, err);
+      } finally {
+        process.exit(0);
+      }
+    });
   });
 }
 
 // SIGHUP is the console window or terminal pane closing — on Windows Node maps
 // the console's close event to it — and without a handler the process dies with
 // the lockfile left behind and nothing in the log.
-for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) process.on(signal, shutdown);
+// Wrapped because a listener is called with the signal NUMBER second, which
+// would land in `then` and be called.
+for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) process.on(signal, () => shutdown(signal));
 
 /**
  * A crash went only to the stderr of whatever window started the cockpit, which

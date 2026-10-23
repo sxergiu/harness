@@ -1,6 +1,10 @@
+import { execFile } from 'node:child_process';
 import { readFileSync, existsSync, realpathSync, statSync } from 'node:fs';
-import { basename, relative, extname, resolve, sep } from 'node:path';
-import type { AgentDiff, DiffFile, DiffHunk, DiffLine, FileContent } from '@harness/shared';
+import { basename, isAbsolute, relative, extname, resolve, sep } from 'node:path';
+import { promisify } from 'node:util';
+import type {
+  AgentDiff, DiffFile, DiffHunk, DiffLine, FileCandidates, FileContent,
+} from '@harness/shared';
 import type { Entry } from './transcript.js';
 
 /** 2 MB. Past this we report the file rather than diffing it. */
@@ -261,29 +265,102 @@ export function within(root: string, path: string): boolean {
  * differently-cased path fails containment and reads as "outside" — the wrong
  * answer in the safe direction, and lowercasing to fix it would loosen the check
  * on every case-sensitive filesystem.
+ *
+ * A RELATIVE reference that names nothing is searched for, because agents name
+ * files by their tail: measured, 146 of 293 links drawn in three repos' prose
+ * resolved to nothing under the cwd, mostly bare `index.ts` meaning
+ * `server/src/index.ts`. The agent's own writes are tried first, then the
+ * checkout's files as git lists them; several matches come back as candidates
+ * rather than a guess. This adds no third way in — every candidate passes the
+ * same `refusal` a direct read does.
  */
-export function readAgentFile(cwd: string, requested: string, touched: string[]): FileContent {
+export async function readAgentFile(
+  cwd: string, requested: string, touched: string[],
+): Promise<FileContent | FileCandidates> {
   if (!requested || requested.includes('\0')) throw new Error('no path given');
-  const path = resolve(cwd, requested);
+  // One spelling: Claude Code records the odd `C:/…` beside `C:\…`, and a raw
+  // comparison refused the agent's own write outside its cwd as "outside".
+  const admitted = new Set(touched.map((t) => resolve(cwd, t)));
+  let path = resolve(cwd, requested);
 
-  if (!touched.includes(path)) {
-    let root: string;
-    let real: string;
-    try {
-      root = realpathSync(cwd);
-      real = realpathSync(path);
-    } catch {
-      throw new Error('this file is not on disk');
+  if (!existsSync(path) && !isAbsolute(requested)) {
+    // Filtered BEFORE the fallback is decided: an admitted path skips the
+    // realpath that would notice it is gone, so a write since deleted would
+    // otherwise stop git being asked and shadow the live match.
+    const live = (ps: string[]): string[] =>
+      ps.filter((p) => existsSync(p) && !refusal(cwd, p, admitted));
+    let found = live(endingIn(requested, [...admitted]));
+    if (!found.length) {
+      found = live(endingIn(requested, await listed(cwd)).map((p) => resolve(cwd, p)));
     }
-    if (!within(root, real)) throw new Error("that path is outside this agent's directory");
+    if (found.length > 1) return { candidates: found.map((p) => relOf(cwd, p)) };
+    if (found.length === 1) path = found[0]!;
   }
+
+  const why = refusal(cwd, path, admitted);
+  if (why) throw new Error(why);
 
   return {
     path,
-    relPath: relative(cwd, path).split(sep).join('/') || basename(path),
+    relPath: relOf(cwd, path),
     language: LANGUAGES[extname(path).toLowerCase()] ?? null,
     content: readCapped(path),
   };
+}
+
+/** Why `path` may not be served, or null if it may — the one containment check. */
+function refusal(cwd: string, path: string, admitted: ReadonlySet<string>): string | null {
+  if (admitted.has(path)) return null;
+  try {
+    return within(realpathSync(cwd), realpathSync(path))
+      ? null
+      : "that path is outside this agent's directory";
+  } catch {
+    return 'this file is not on disk';
+  }
+}
+
+function relOf(cwd: string, path: string): string {
+  return relative(cwd, path).split(sep).join('/') || basename(path);
+}
+
+/**
+ * The paths whose trailing WHOLE segments are `ref`'s — never a substring:
+ * `ex.ts` must not find `index.ts`, nor `erver/src/x.ts` find `server/src/x.ts`.
+ * Splits on both separators, since touched paths are `C:\…` while refs and
+ * git's output use `/`. Case is not folded, for `readAgentFile`'s reason.
+ */
+export function endingIn(ref: string, paths: string[]): string[] {
+  const want = ref.split(/[\\/]/).filter((s) => s && s !== '.');
+  if (!want.length) return [];
+  return paths.filter((p) => {
+    const tail = p.split(/[\\/]/).slice(-want.length);
+    return tail.length === want.length && want.every((s, i) => s === tail[i]);
+  });
+}
+
+const execFileAsync = promisify(execFile);
+
+/**
+ * The checkout's files under `cwd`, relative to it — tracked plus untracked
+ * but not ignored, so `node_modules` stays out. Async for `account.ts`'s
+ * reason: a slow repo must not stall the heartbeat. `-z` because `quotePath`
+ * C-quotes non-ASCII names otherwise. A cwd that is not a repo, a git that is
+ * not on PATH and a timeout all answer empty, which is "no match".
+ */
+async function listed(cwd: string): Promise<string[]> {
+  try {
+    // `-C`, never the `cwd` option: on Windows a child's executable is looked
+    // for in its cwd before PATH, so a `git.exe` committed to the checkout would
+    // run as this server the first time someone clicked a reference.
+    const { stdout } = await execFileAsync(
+      'git', ['-C', cwd, 'ls-files', '-z', '--cached', '--others', '--exclude-standard'],
+      { timeout: 3_000, maxBuffer: 32 * 1024 * 1024, windowsHide: true },
+    );
+    return stdout.split('\0').filter(Boolean);
+  } catch {
+    return [];
+  }
 }
 
 /**

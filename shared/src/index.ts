@@ -509,6 +509,17 @@ export interface FileContent {
   content: string;
 }
 
+/**
+ * What the file route answers instead of a file when a reference names nothing
+ * as given and several files end in it — `index.ts` meaning one of three. An
+ * answer rather than an error, so the panel can offer them. Relative to the cwd
+ * and `/`-joined like `relPath`, each already admitted by the check a read
+ * must pass.
+ */
+export interface FileCandidates {
+  candidates: string[];
+}
+
 // ---------------------------------------------------------------------------
 // Blocked
 // ---------------------------------------------------------------------------

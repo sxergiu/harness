@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import type { FileContent } from '@harness/shared';
+import type { FileCandidates, FileContent } from '@harness/shared';
 import type { FileViewer } from './fileRef.js';
 import { highlight } from './highlight.js';
 import { Markdown } from './Markdown.js';
@@ -30,6 +30,9 @@ export function FileView(
 ): React.ReactElement {
   const { get } = useApi();
   const [file, setFile] = useState<FileContent | null>(null);
+  /** Set when the reference names several files. Choosing one REPLACES this
+   * panel: the list has done its job, and left open it holds a file slot. */
+  const [candidates, setCandidates] = useState<string[] | null>(null);
   const [failed, setFailed] = useState<string | null>(null);
   /** Bumped by `↻`, which is the only thing that refetches. */
   const [reload, setReload] = useState(0);
@@ -38,8 +41,13 @@ export function FileView(
   useEffect(() => {
     let live = true;
     setFailed(null);
-    void get<FileContent>(`/api/agents/${paneId}/file?path=${encodeURIComponent(path)}`)
-      .then((f) => { if (live) setFile(f); })
+    setCandidates(null);
+    void get<FileContent | FileCandidates>(`/api/agents/${paneId}/file?path=${encodeURIComponent(path)}`)
+      .then((f) => {
+        if (!live) return;
+        if ('candidates' in f) setCandidates(f.candidates);
+        else setFile(f);
+      })
       .catch((e: Error) => { if (live) setFailed(e.message); });
     return () => { live = false; };
   }, [get, paneId, path, reload]);
@@ -56,7 +64,7 @@ export function FileView(
         <span className="min-w-0 flex-1 truncate text-neutral-400" title={file?.path ?? path}>
           {file?.relPath ?? path}
         </span>
-        {!file && !failed && <Spinner />}
+        {!file && !candidates && !failed && <Spinner />}
         {markdown && (
           <button
             onClick={() => setRaw(!raw)}
@@ -85,6 +93,23 @@ export function FileView(
       )}
 
       <div className="min-h-0 flex-1 overflow-auto">
+        {!file && candidates && (
+          <div className="px-2 py-1.5">
+            <p className="mb-1 text-neutral-500">
+              {candidates.length} files end in <code>{path}</code>
+            </p>
+            {candidates.map((c) => (
+              <button
+                key={c}
+                onClick={() => { onClose(); viewer.open(c); }}
+                className="block text-left text-neutral-400 underline decoration-dotted underline-offset-2 hover:text-neutral-200"
+                title={`Open ${c}`}
+              >
+                {c}
+              </button>
+            ))}
+          </div>
+        )}
         {file && (markdown && !raw
           // Threaded on, so a reference inside a document opens the next one.
           ? <div className="px-2 py-1.5"><Markdown source={file.content} viewer={viewer} /></div>

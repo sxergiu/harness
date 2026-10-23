@@ -8,7 +8,7 @@ import { dormantSession, launchStalled, seedCwd } from './board.js';
 import {
   HOLD_MS, decide, grantOf, holdFor, mayTrust, pinAction, settleAction, trustKey,
 } from './claudeFiles.js';
-import { buildAgentDiff, within } from './diff.js';
+import { buildAgentDiff, endingIn, within } from './diff.js';
 import {
   announces, backoffMs, enterDeclines, paneTookText, promptBoxHolds, returnedToShell, shellTail, staleServerWarning,
   type PaneInfo,
@@ -354,6 +354,32 @@ test('a root that already ends in a separator does not grow a second one', () =>
   // already imports a `parse` of its own.
   const root = resolve('/');
   assert.equal(within(root, join(root, 'etc', 'passwd')), true);
+});
+
+// -- what a bare file reference names --------------------------------------
+// A wrong match opens a different file under the name the agent wrote, and
+// reads exactly like the right one. Whole segments only, never a substring.
+const sources = [
+  join(repo, 'server', 'src', 'index.ts'),
+  join(repo, 'shared', 'src', 'index.ts'),
+  join(repo, 'server', 'src', 'board.ts'),
+];
+
+test('a reference matches whole trailing segments, never a substring of one', () => {
+  assert.deepEqual(endingIn('ex.ts', sources), []);
+  assert.deepEqual(endingIn('erver/src/board.ts', sources), []);
+  assert.deepEqual(endingIn('Board.ts', sources), []);
+});
+
+test('a bare name that ends several files answers all of them', () => {
+  assert.deepEqual(endingIn('index.ts', sources), [sources[0], sources[1]]);
+  assert.deepEqual(endingIn('server/src/index.ts', sources), [sources[0]]);
+  assert.deepEqual(endingIn('./board.ts', sources), [sources[2]]);
+});
+
+test('a `/` reference finds a backslash path, the shape touched paths have on Windows', () => {
+  const touched = 'C:\\repo\\server\\src\\herdr.ts';
+  assert.deepEqual(endingIn('src/herdr.ts', [touched]), [touched]);
 });
 
 // -- the one unstable field we parse ---------------------------------------

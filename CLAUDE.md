@@ -452,9 +452,11 @@ server/src/
                       the pane is never reused, the fresh process being the point
   account.ts          which Claude account is being spent, and switching to another.
                       Drives the `claude auth` commands; handles no credentials
-  summary.ts          each conversation's running brief, rewritten after every
-                      finished turn (`completion_seq`) by a warm haiku agent of
-                      ours — the one per-turn cost the cockpit adds. It holds the
+  summary.ts          each conversation's running brief, brought up to date by a
+                      warm haiku agent of ours ONLY while its tab is open — every
+                      update is billed to the account, so nothing runs for a
+                      conversation nobody is reading, and a failed job stops the
+                      updates for that session until ↻. It holds the
                       Read tool ONLY and answers in its transcript; the server
                       writes `~/.harness/summaries/<uuid>.md`, because the digest
                       is other agents' text and a summarizer with Write under

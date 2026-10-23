@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
+import { existsSync, openSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -1293,10 +1293,17 @@ app.post('/api/update', async (_req, reply) => {
  * there ends nothing — which is what the line says.
  */
 function restartAs(version: string): void {
+  // The successor's stderr is the only account of a start that never got as
+  // far as `harness.log`, which a successful start truncates anyway: an import
+  // that throws dies before any handler of ours exists.
+  let stderr: number | 'ignore' = 'ignore';
+  try {
+    stderr = openSync(RESTART_LOG, 'w');
+  } catch { /* an unwritable home costs the trace, never the restart */ }
   const child = spawn(
     process.execPath,
     [fileURLToPath(import.meta.url), '--port', String(port), '--no-open'],
-    { detached: true, stdio: 'ignore', windowsHide: true },
+    { detached: true, stdio: ['ignore', 'ignore', stderr], windowsHide: true },
   );
   child.unref();
   // A spawn that failed reports it as an `error` event this process exits
@@ -1509,6 +1516,17 @@ if (built) {
  */
 const CLEANUP_MS = 2_000;
 
+/**
+ * How long `app.close()` may wait on connections before they are cut. The lock
+ * is already released by then, so a close that never resolved used to mean no
+ * restart and no harness, with nothing on screen to say so. The port itself is
+ * free the moment `close` is called; only the stragglers are waited on.
+ */
+const CLOSE_MS = 3_000;
+
+/** Where a restarted harness's stderr goes — see `restartAs`. */
+const RESTART_LOG = join(homedir(), '.harness', 'restart.log');
+
 let shuttingDown = false;
 
 /**
@@ -1543,7 +1561,10 @@ function shutdown(cause: string, then?: () => void): void {
     // waits on it: measured, with one tab connected it never resolved. Tabs
     // told `quit` close themselves first, which is why the ⏻ never hit it.
     for (const c of clients) c.terminate();
-    void app.close().then(() => {
+    const closed = app.close();
+    const cut = setTimeout(() => app.server.closeAllConnections(), CLOSE_MS);
+    void closed.then(() => {
+      clearTimeout(cut);
       try {
         then?.();
       } catch (err) {

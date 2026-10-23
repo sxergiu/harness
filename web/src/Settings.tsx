@@ -105,9 +105,12 @@ export function Settings({ onClose }: { onClose: () => void }): React.ReactEleme
  * view, so a registry that does not answer costs this line and nothing else.
  *
  * Nothing here waits for the restart: the server comes back as the new version
- * and the socket's `hello` reloads the page, so `restarting` is the last thing
- * this ever shows.
+ * and the socket's `hello` reloads the page, so this view is gone by then. If
+ * it is still here after `RESTART_WAIT_MS`, the successor did not come up — and
+ * with the old process already exited, nothing else would ever say so.
  */
+const RESTART_WAIT_MS = 45_000;
+
 function Update({ onError }: { onError: (message: string | null) => void }): React.ReactElement {
   const { get, post } = useApi();
   const [state, setState] = useState<UpdateView | null>(null);
@@ -117,6 +120,15 @@ function Update({ onError }: { onError: (message: string | null) => void }): Rea
     get<UpdateView>('/api/update').then(setState, (e: Error) =>
       setState({ latest: null, available: false, updatable: false, error: e.message }));
   }, [get]);
+
+  useEffect(() => {
+    if (phase !== 'restarting') return;
+    const timer = setTimeout(() => onError(
+      'the updated harness did not come back — run `harness` in a terminal; '
+      + 'if it will not start, ~/.harness/restart.log says why',
+    ), RESTART_WAIT_MS);
+    return () => clearTimeout(timer);
+  }, [phase, onError]);
 
   const run = async (): Promise<void> => {
     onError(null);

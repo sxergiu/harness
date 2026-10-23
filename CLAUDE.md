@@ -657,7 +657,9 @@ foot of the board because that is where the bars that prompt it are.
 - **The email reaches a SHELL COMMAND LINE**, since `launchCommand` has no argv to hand it
   to, so it is checked against the shape of an address and dropped rather than quoted if it
   is anything else. Every address comes out of `claude auth status`, so this is not expected
-  to fire; it is the one place a string from another process reaches a shell.
+  to fire. It is one of two places a string from another process reaches a shell; the
+  other is the registry's version in the self-update's `npm install` on Windows, which is
+  held to an anchored semver pattern for the same reason.
 - **`available: false` is not `current: null`.** The first is a `claude` that did not
   answer — not on PATH, or an output this cannot read — and the second is nobody signed in.
   Conflating them reports "signed out" about a machine that is signed in.

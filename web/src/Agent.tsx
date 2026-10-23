@@ -973,7 +973,11 @@ function Blocked({ paneId }: { paneId: string }): React.ReactElement {
     setFailed(null);
     try {
       await post(`/api/agents/${paneId}/keys`, { keys: [k] });
-    } catch { /* the re-read below will show that nothing changed */ }
+    } catch (e) {
+      // A refused Enter (`answerKeys`) changes nothing on screen, so the re-read
+      // alone would look like a key that simply did not take.
+      setFailed((e as Error).message);
+    }
     setTimeout(() => setReload((n) => n + 1), 400);
   };
 

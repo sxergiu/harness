@@ -443,6 +443,11 @@ server/src/
   notify.ts           osascript + afplay, plus a Herdr toast
   instance.ts         the single-instance lock, and where to point the browser
   origin.ts           who may talk to an unauthenticated server. THE security boundary
+  picker.ts           the OS folder dialog a space's directory is chosen with, opened
+                      by this process since a page never learns an absolute path.
+                      On Windows (IFileOpenDialog via PowerShell) the shim compiles
+                      and the dialog has never been opened; macOS and Linux are
+                      written from docs and pinned only by tests
   usage.ts            the account's limit bars, read through an agent of our own
   ping.ts             ↻'s second job, on its own route: a FRESH agent of ours,
                       sent "ping" and closed once it answers — which wakes agents

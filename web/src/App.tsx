@@ -28,6 +28,8 @@ export function App(): React.ReactElement {
   const [error, setError] = useState<string | null>(null);
   /** `↻` is out: its ping runs a fresh agent, which takes seconds. */
   const [refreshing, setRefreshing] = useState(false);
+  /** The OS folder dialog is up, waiting on the human — see `newSpace`. */
+  const [picking, setPicking] = useState(false);
   const { theme, toggle: toggleTheme } = useTheme();
   const copyOnSelect = useCopyOnSelect();
   /**
@@ -91,6 +93,35 @@ export function App(): React.ReactElement {
   const start = (where: string, on: boolean): void => {
     setStarting((cur) => (on ? where : cur === where ? null : cur));
     if (on) setSettingsOpen(false);
+  };
+
+  /**
+   * A space starts from the folder it is for, and a cancelled dialog creates
+   * nothing. A dialog that FAILS (503) still creates one, folderless: otherwise
+   * a machine with no dialog to open could not make a space at all, and ✎ is
+   * where its path gets typed. A 409 is a dialog already open elsewhere, which
+   * is not a failure and must not leave a stray space behind.
+   */
+  const newSpace = async (): Promise<void> => {
+    if (picking) return;
+    setError(null);
+    setPicking(true);
+    try {
+      let dir: string | null;
+      try {
+        ({ dir } = await post<{ dir: string | null }>('/api/pick-dir'));
+      } catch (e) {
+        if ((e as { status?: number }).status !== 503) throw e;
+        await post('/api/workspaces');
+        setError(`${(e as Error).message} — created without a folder; ✎ to type one`);
+        return;
+      }
+      if (dir !== null) await post('/api/workspaces', { dir });
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setPicking(false);
+    }
   };
 
   const offline = !state.connected || !state.herdrConnected;
@@ -169,11 +200,10 @@ export function App(): React.ReactElement {
               />
               <IconButton
                 label="+"
-                title="New space"
-                onClick={() => {
-                  setError(null);
-                  void post('/api/workspaces').catch((e: Error) => setError(e.message));
-                }}
+                title="New space — choose its folder"
+                on={picking}
+                className={picking ? 'animate-pulse' : ''}
+                onClick={() => void newSpace()}
               />
               {/*
                 Last, and after the space actions rather than among them: these
@@ -988,6 +1018,7 @@ function Space(
           dir={group.dir ?? ''}
           gitDelegated={group.gitDelegated}
           busy={busy}
+          onError={setError}
           onCancel={() => { setEditing(false); setError(null); }}
           onSave={(label, dir, gitDelegated) => void save(label, dir, gitDelegated)}
         />
@@ -1106,18 +1137,35 @@ function Space(
  * do with git. Edited in the row itself.
  */
 function SpaceEditor(
-  { label, dir, gitDelegated, busy, onSave, onCancel }: {
+  { label, dir, gitDelegated, busy, onSave, onError, onCancel }: {
     label: string;
     dir: string;
     gitDelegated: boolean;
     busy: boolean;
     onSave: (label: string, dir: string, gitDelegated: boolean) => void;
+    onError: (message: string | null) => void;
     onCancel: () => void;
   },
 ): React.ReactElement {
+  const { post } = useApi();
   const [nextLabel, setNextLabel] = useState(label);
   const [nextDir, setNextDir] = useState(dir);
   const [nextGit, setNextGit] = useState(gitDelegated);
+  const [browsing, setBrowsing] = useState(false);
+
+  /** Fills the field and nothing more: the pick is saved like a typed path. */
+  const browse = async (): Promise<void> => {
+    onError(null);
+    setBrowsing(true);
+    try {
+      const { dir: picked } = await post<{ dir: string | null }>('/api/pick-dir');
+      if (picked !== null) setNextDir(picked);
+    } catch (e) {
+      onError((e as Error).message);
+    } finally {
+      setBrowsing(false);
+    }
+  };
 
   const keys = (e: React.KeyboardEvent): void => {
     if (e.key === 'Enter') onSave(nextLabel.trim(), nextDir.trim(), nextGit);
@@ -1134,13 +1182,23 @@ function SpaceEditor(
         placeholder="name"
         className="mb-1 w-full rounded border border-neutral-700 bg-neutral-950 px-1 py-0.5 text-neutral-200"
       />
-      <input
-        value={nextDir}
-        onChange={(e) => setNextDir(e.target.value)}
-        onKeyDown={keys}
-        placeholder="~/repos/…  — where agents here run"
-        className="w-full rounded border border-neutral-700 bg-neutral-950 px-1 py-0.5 text-neutral-200"
-      />
+      <div className="flex gap-1">
+        <input
+          value={nextDir}
+          onChange={(e) => setNextDir(e.target.value)}
+          onKeyDown={keys}
+          placeholder="~/repos/…  — where agents here run"
+          className="min-w-0 flex-1 rounded border border-neutral-700 bg-neutral-950 px-1 py-0.5 text-neutral-200"
+        />
+        <button
+          disabled={browsing}
+          title="Choose the folder in your system's dialog"
+          className="shrink-0 text-neutral-500 hover:text-neutral-300 disabled:opacity-40"
+          onClick={() => void browse()}
+        >
+          {browsing ? <Spinner /> : 'browse…'}
+        </button>
+      </div>
       {/*
         Both caveats are on screen rather than in a tooltip, because both are
         invisible once the box is ticked: the grant is on the PATH, so it

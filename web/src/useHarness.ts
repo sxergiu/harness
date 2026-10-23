@@ -155,7 +155,10 @@ export function useApi(): {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body ?? {}),
     });
-    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error ?? res.statusText);
+    if (!res.ok) {
+      const message = (await res.json().catch(() => ({}))).error ?? res.statusText;
+      throw Object.assign(new Error(message), { status: res.status });
+    }
     return res.json() as Promise<T>;
   }, []);
   const get = useCallback(async <T,>(path: string): Promise<T> => {

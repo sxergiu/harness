@@ -18,6 +18,7 @@ import { parse as parseRecent } from './history.js';
 import { isOurs, merge, versionOf } from './herdrRules.js';
 import { shouldOpen, type Running } from './instance.js';
 import { admits, isLocal } from './origin.js';
+import { pickedFrom } from './picker.js';
 import { parse } from './projects.js';
 import { argsFor, DEFAULT_RULES, flatten, modelFrom, resumeArgs, rulesFor, runArgs } from './rules.js';
 import { parse as parseShades } from './shades.js';
@@ -1251,4 +1252,30 @@ test('a summary is read off ITS job’s turn — a /clear that did not land is n
     reply('## Discussed\n- this one'),
   ], '/repo');
   assert.equal(answerOf(ours, 'job bbbb'), '## Discussed\n- this one');
+});
+
+// -- the folder dialog -----------------------------------------------------
+// A failure misread as a cancel is a click that does nothing and says nothing.
+// macOS and Linux cannot be run here at all, so these are their only evidence.
+
+test('A CANCEL IS NULL and a failure throws, per platform', () => {
+  const ran = (code: number, stdout: string, stderr = '') => ({ code, stdout, stderr });
+  assert.equal(pickedFrom('win32', ran(0, '')), null);
+  assert.throws(() => pickedFrom('win32', ran(1, '', 'Add-Type failed')), /Add-Type failed/);
+  assert.equal(pickedFrom('darwin', ran(1, '', 'execution error: User canceled. (-128)')), null);
+  assert.throws(() => pickedFrom('darwin', ran(1, '', 'not authorized')), /not authorized/);
+  // zenity prints this on an ordinary cancel; it is not a failure.
+  assert.equal(pickedFrom('linux', ran(1, '', 'Gtk-Message: GtkDialog mapped without a transient parent')), null);
+  assert.throws(() => pickedFrom('linux', ran(255, '')), /exit 255/);
+  // The same exit 1, with no display to open: a stale DISPLAY over ssh -X.
+  assert.throws(() => pickedFrom('linux', ran(1, '', '(zenity:4242): Gtk-WARNING **: cannot open display: :0')), /cannot open display/);
+});
+
+test('a picked path comes back whole, without the separator osascript adds', () => {
+  const ok = (stdout: string) => ({ code: 0, stdout, stderr: '' });
+  assert.equal(pickedFrom('win32', ok('C:\\Users\\Șerban\\proiect ăîâ')), 'C:\\Users\\Șerban\\proiect ăîâ');
+  assert.equal(pickedFrom('win32', ok('C:\\')), 'C:\\');
+  assert.equal(pickedFrom('darwin', ok('/Users/a/repo/\n')), '/Users/a/repo');
+  assert.equal(pickedFrom('darwin', ok('/\n')), '/');
+  assert.equal(pickedFrom('linux', ok('/home/a/repo\n')), '/home/a/repo');
 });

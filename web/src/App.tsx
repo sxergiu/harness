@@ -26,6 +26,8 @@ export function App(): React.ReactElement {
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
   const [selected, setSelected] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /** `↻` is out: its ping runs a fresh agent, which takes seconds. */
+  const [refreshing, setRefreshing] = useState(false);
   const { theme, toggle: toggleTheme } = useTheme();
   const copyOnSelect = useCopyOnSelect();
   /**
@@ -145,15 +147,24 @@ export function App(): React.ReactElement {
                 process subscribing silently and permanently stops ours — the
                 board then keeps resyncing on its heartbeat but stops feeling
                 live. This takes the stream back, and is the honest answer to
-                "is this actually current?".
+                "is this actually current?". It also pings a fresh agent of the
+                harness's own, which is what wakes agents stalled on API timeouts.
               */}
               <IconButton
                 label="↻"
-                title="Reclaim the event stream and resync now"
-                className="ml-auto"
+                title="Reclaim the event stream, resync, and ping a fresh agent to wake stalled ones"
+                on={refreshing}
+                className={`ml-auto ${refreshing ? 'animate-pulse' : ''}`}
                 onClick={() => {
                   setError(null);
                   void post('/api/refresh').catch((e: Error) => setError(e.message));
+                  // Only the ping is held off while one is out: reclaiming the
+                  // stream is instant and must never wait behind it.
+                  if (refreshing) return;
+                  setRefreshing(true);
+                  void post('/api/ping')
+                    .catch((e: Error) => setError(e.message))
+                    .finally(() => setRefreshing(false));
                 }}
               />
               <IconButton

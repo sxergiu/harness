@@ -444,6 +444,12 @@ server/src/
   instance.ts         the single-instance lock, and where to point the browser
   origin.ts           who may talk to an unauthenticated server. THE security boundary
   usage.ts            the account's limit bars, read through an agent of our own
+  ping.ts             ↻'s second job, on its own route: a FRESH agent of ours,
+                      sent "ping" and closed once it answers — which wakes agents
+                      stalled on API timeouts. Why it works is inferred; that it
+                      works is the human's observation. The timeouts reach no
+                      transcript, so the others' recovery is never observed, and
+                      the pane is never reused, the fresh process being the point
   account.ts          which Claude account is being spent, and switching to another.
                       Drives the `claude auth` commands; handles no credentials
   invariants.test.ts  the invariants that fail silently, over fixtures only.
@@ -675,8 +681,8 @@ foot of the board because that is where the bars that prompt it are.
   So `seedCwd` reads AGENT panes and falls back to bare shells only when the space has none:
   a shell is as often a window somebody opened elsewhere and forgot as it is the space's
   work, where an agent was started to do what the space exists for. Instruments never vote —
-  the usage agent runs in `~/.harness`, which is nobody's repo, and an aside runs in its
-  parent's cwd, a second voice for a directory that already has one. **A tie seeds nothing**,
+  the usage and ping agents run in `~/.harness`, which is nobody's repo, and an aside runs
+  in its parent's cwd, a second voice for a directory that already has one. **A tie seeds nothing**,
   because the seed is kept for the life of the space: a coin flip is not a wrong dir for one
   heartbeat but a wrong dir until somebody notices, and the space simply has no dir until
   the human types one — which `POST /api/workspaces/:id/agents` already refuses without.

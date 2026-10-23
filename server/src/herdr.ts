@@ -444,6 +444,12 @@ export interface AgentInfo {
    * holding its name — see `launchStalled` in `board.ts`.
    */
   launch_pending?: boolean;
+  /**
+   * Schema: "The current idle transition completed work, independently of who
+   * has viewed it." Present on protocol 22, absent until a first turn ends, and
+   * not known for older protocols — see `Ping.answered`.
+   */
+  completion_seq?: number | null;
 }
 
 export interface Snapshot {

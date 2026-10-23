@@ -1071,13 +1071,14 @@ test('shells are read only when the space has no agent at all', () => {
 });
 
 test('our own instruments never vote', () => {
-  // The usage agent runs in ~/.harness, which is nobody's repo, and both it and
-  // an aside are parked in a space that did not ask for them.
-  const names = new Map([['p2', 'harness-usage'], ['p3', 'aside-w0-ph']]);
+  // The usage and ping agents run in ~/.harness, which is nobody's repo, and
+  // they and an aside are parked in a space that did not ask for them.
+  const names = new Map([['p2', 'harness-usage'], ['p3', 'aside-w0-ph'], ['p4', 'harness-ping']]);
   const panes = [
     paneAt('p1', '/repos/a', { agent: 'claude' }),
     paneAt('p2', '/home/x/.harness', { agent: 'claude' }),
     paneAt('p3', '/repos/a', { agent: 'claude' }),
+    paneAt('p4', '/home/x/.harness', { agent: 'claude' }),
   ];
   assert.equal(seedCwd(panes, 'w0', names), '/repos/a');
   // With nothing but an instrument, the fallback must not reach it either.
@@ -1126,6 +1127,7 @@ test('a dormant instrument stays off the board (invariant 18)', () => {
   const pane = paneAt('p1', '/repos/a', { agent_session: session });
   assert.equal(dormantSession(pane, 'aside'), null);
   assert.equal(dormantSession(pane, 'usage'), null);
+  assert.equal(dormantSession(pane, 'ping'), null);
   assert.equal(dormantSession(pane, RUN_FORK.label), null);
 });
 

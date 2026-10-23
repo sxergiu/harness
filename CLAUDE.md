@@ -453,12 +453,22 @@ server/src/
                       It runs on haiku, since every ↻ press spends its turn
   account.ts          which Claude account is being spent, and switching to another.
                       Drives the `claude auth` commands; handles no credentials
+  summary.ts          each conversation's running brief, brought up to date by a
+                      warm haiku agent of ours ONLY while its tab is open — every
+                      update is billed to the account, so nothing runs for a
+                      conversation nobody is reading, and a failed job stops the
+                      updates for that session until ↻. It holds the
+                      Read tool ONLY and answers in its transcript; the server
+                      writes `~/.harness/summaries/<uuid>.md`, because the digest
+                      is other agents' text and a summarizer with Write under
+                      this machine's grant could be talked into writing anywhere
   invariants.test.ts  the invariants that fail silently, over fixtures only.
                       Also the guard that every test file is named in `npm test`
   chrome.test.ts      which digit answers that dialog, and answering it once
 web/src/
   App.tsx             the one column: collapsible spaces, their agents, inline edits
-  Agent.tsx           header, feed|diff tabs, actions, blocked panel
+  Agent.tsx           header, feed|diff|subagents|summary tabs, actions, blocked panel
+  Summary.tsx         the summary tab: that file, its age, and ↻ to rebuild it
   Feed.tsx            structured feed, turn pagination, subagent nesting
   Status.tsx          StatusDot / Working / Spinner. The one opinion about what
                       "working" looks like — board row, header and panels all read it

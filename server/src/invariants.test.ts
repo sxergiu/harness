@@ -25,6 +25,7 @@ import {
   aliasDisproven, contextOf, effortDisproven, effortOf, feedTurns, goalOf, modelOf, slugForCwd,
   windowFor, type Entry,
 } from './transcript.js';
+import { answerOf, digestOf } from './summary.js';
 import { cropPanel, limitsOf } from './usage.js';
 
 /**
@@ -1192,4 +1193,51 @@ test('a launch handed back to the shell is told from a live agent by the LAST li
   assert.equal(returnedToShell(['● Done.', '', rule, '❯ ', rule].join('\n')), false);
   assert.equal(returnedToShell([rule, '❯ ', rule, '  opus · ctx 42%'].join('\n')), false);
   assert.equal(returnedToShell(''), false);
+});
+
+// -- the summary -------------------------------------------------------------
+// Each update costs a haiku job, and the open tab asks on every tick, so a
+// digest that is not empty when nothing new was said is a bill nobody sees.
+
+test('the digest takes only what was said, from where the last one stopped', () => {
+  const turns = feedTurns([
+    user('first question'),
+    reply('first answer'),
+    user('second question'),
+    { type: 'assistant', message: { content: [{ type: 'tool_use', id: 't1', name: 'Read', input: { file_path: '/repo/a.ts' } }] } } as unknown as Entry,
+    reply('second answer'),
+    user('third, still running'),
+  ], '/repo');
+  const d = digestOf(turns, 1, false);
+  assert.ok(d);
+  assert.equal(d.through, 2);
+  assert.equal(d.text, 'HUMAN: second question\n\nAGENT: second answer');
+  assert.equal(digestOf(turns, 2, false), null);
+  assert.equal(digestOf(turns, 2, true)?.text, 'HUMAN: third, still running');
+  const cmd = feedTurns([user('<command-name>/goal</command-name><command-args>ship it</command-args>')], '/repo');
+  assert.equal(digestOf(cmd, 0, true)?.text, 'HUMAN ran /goal ship it');
+});
+
+test('an oversized digest keeps the NEWEST turns', () => {
+  const big = 'x'.repeat(2_500);
+  const turns = feedTurns(Array.from({ length: 40 }, (_, i) => user(`${i} ${big}`)), '/repo');
+  const d = digestOf(turns, 0, true);
+  assert.ok(d);
+  assert.ok(d.text.startsWith('[earlier turns omitted]'));
+  assert.ok(d.text.includes('HUMAN: 39 '));
+  assert.ok(!d.text.includes('HUMAN: 0 '));
+});
+
+test('a summary is read off ITS job’s turn — a /clear that did not land is not an answer', () => {
+  const turns = feedTurns([
+    user('Read digest.md and follow the instructions at its top (job aaaa).'),
+    reply('## Discussed\n- the OTHER conversation'),
+  ], '/repo');
+  assert.equal(answerOf(turns, 'job bbbb'), null);
+  const ours = feedTurns([
+    user('Read digest.md and follow the instructions at its top (job bbbb).'),
+    reply('I’ll read the file.'),
+    reply('## Discussed\n- this one'),
+  ], '/repo');
+  assert.equal(answerOf(ours, 'job bbbb'), '## Discussed\n- this one');
 });

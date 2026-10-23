@@ -13,6 +13,7 @@ import { FileView } from './FileView.js';
 import { type Panels, panelsOf, rememberPanels } from './panels.js';
 import { ContextMeter, Spinner, StatusDot, Working } from './Status.js';
 import { SubagentsTab } from './Subagents.js';
+import { SummaryTab } from './Summary.js';
 import { modelLabel, modelReading, since, useApi } from './useHarness.js';
 
 /**
@@ -365,7 +366,7 @@ export function AgentView(
   const { post } = useApi();
   const root = useRef<HTMLDivElement>(null);
   const copied = useSelectionCopy(root, copyOnSelect);
-  const [tab, setTab] = useState<'feed' | 'diff' | 'subagents'>('feed');
+  const [tab, setTab] = useState<'feed' | 'diff' | 'subagents' | 'summary'>('feed');
   const [prompt, setPromptState] = useState(() => drafts.get(agent.paneId) ?? '');
   const setPrompt = (text: string): void => {
     setPromptState(text);
@@ -806,7 +807,7 @@ export function AgentView(
       {agent.status === 'blocked' && agent.live && <Blocked paneId={agent.paneId} />}
 
       <nav className="flex gap-3 border-b border-neutral-800 px-3">
-        {(['feed', 'diff', 'subagents'] as const).map((t) => (
+        {(['feed', 'diff', 'subagents', 'summary'] as const).map((t) => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -853,6 +854,7 @@ export function AgentView(
           {tab === 'subagents' && (
             <SubagentsTab paneId={agent.paneId} tick={tick} viewer={viewer} />
           )}
+          {tab === 'summary' && <SummaryTab paneId={agent.paneId} tick={tick} viewer={viewer} />}
         </div>
         {forkOpen && (
           <>

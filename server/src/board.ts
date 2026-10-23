@@ -12,6 +12,7 @@ import { notify } from './notify.js';
 import { PING_AGENT } from './ping.js';
 import type { Projects } from './projects.js';
 import type { Shades } from './shades.js';
+import { SUMMARY_AGENT } from './summary.js';
 import {
   Transcripts, activityOf, aliasDisproven, assignmentOf, contextOf, effortDisproven, effortOf, errorOf, goalOf, modelOf, todoOf, transcriptPathFor, type Entry,
 } from './transcript.js';
@@ -775,7 +776,7 @@ export function dormantSession(p: PaneInfo, tabLabel: string | null | undefined)
   if (p.agent || !session || session.kind !== 'id' || session.agent !== 'claude') return null;
   if (
     tabLabel === ASIDE_FORK.label || tabLabel === RUN_FORK.label
-    || tabLabel === 'usage' || tabLabel === 'ping'
+    || tabLabel === 'usage' || tabLabel === 'ping' || tabLabel === 'summary'
   ) return null;
   return session.value;
 }
@@ -934,7 +935,7 @@ function place(members: AgentRow[], locks: Map<string, number>): AgentRow[] {
  * reason asides are named after their parent's pane.
  */
 function isInstrument(name: string | undefined): boolean {
-  return name === USAGE_AGENT || name === PING_AGENT || isAside(name);
+  return name === USAGE_AGENT || name === PING_AGENT || name === SUMMARY_AGENT || isAside(name);
 }
 
 /** The one rule mapping a Herdr name onto "this pane is somebody's fork". */

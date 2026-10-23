@@ -234,8 +234,9 @@ export interface AgentRow {
    * apart by. It means nothing — that is the point: every other colour on the
    * row is a claim about the agent, and this one is only a claim about you.
    *
-   * Held in memory against a pane id, so it is gone after a harness restart and
-   * never reaches the RECENT cache on disk (see `Board.agents`).
+   * Kept in `~/.harness/shades.json` against a pane id, so it survives a harness
+   * or Herdr restart — and a recycled pane id can inherit it. Never on a RECENT
+   * row (see `Board.agents`).
    */
   shade: AgentShade | null;
   /**
@@ -245,7 +246,8 @@ export interface AgentRow {
    * disagree with.
    *
    * Everything unlocked keeps the attention sort among itself and simply flows
-   * around whatever is locked. Held in memory against a pane id, like `shade`.
+   * around whatever is locked. Held in memory only, against a pane id — unlike
+   * `shade`.
    */
   locked: boolean;
   /** False once the pane is gone: the row moved to RECENT. */

@@ -19,6 +19,7 @@ import { shouldOpen, type Running } from './instance.js';
 import { admits, isLocal } from './origin.js';
 import { parse } from './projects.js';
 import { argsFor, DEFAULT_RULES, flatten, modelFrom, resumeArgs, rulesFor } from './rules.js';
+import { parse as parseShades } from './shades.js';
 import {
   aliasDisproven, contextOf, effortDisproven, effortOf, feedTurns, goalOf, modelOf, slugForCwd,
   windowFor, type Entry,
@@ -854,6 +855,36 @@ test('rows missing the two fields the column cannot render without are dropped',
     rows: [{ paneId: 'w2:pA', name: 'good' }, { name: 'no pane' }, { paneId: 'w2:pB' }, null, 'nonsense'],
   }));
   assert.deepEqual(rows.map((r) => r.name), ['good']);
+});
+
+// -- shades survive a restart ---------------------------------------------
+// A shade off disk is rendered through a class table keyed on `AGENT_SHADES`,
+// so one that list no longer holds would reach the row as no class at all.
+
+const shadeFile = (shades: unknown): string => JSON.stringify({ version: 1, shades });
+
+test('a stored shade is read back against its pane', () => {
+  assert.deepEqual([...parseShades(shadeFile([{ paneId: 'w2:p8', shade: 'teal' }]))], [['w2:p8', 'teal']]);
+});
+
+test('a shade file of another version, or another shape, yields no tints', () => {
+  assert.equal(parseShades('{"version":2,"shades":[{"paneId":"w2:p8","shade":"teal"}]}').size, 0);
+  assert.equal(parseShades('{"version":1}').size, 0);
+  assert.equal(parseShades('[{"paneId":"w2:p8","shade":"teal"}]').size, 0);
+});
+
+test('an entry with no pane, or a shade the cockpit cannot draw, is dropped', () => {
+  const shades = parseShades(shadeFile([
+    { paneId: 'w2:p8', shade: 'teal' }, { shade: 'lime' }, { paneId: 'w2:p9', shade: 'amber' }, null,
+  ]));
+  assert.deepEqual([...shades.keys()], ['w2:p8']);
+});
+
+test('the newest entry for a pane wins, and the file is cut at its limit', () => {
+  const twice = parseShades(shadeFile([{ paneId: 'w2:p8', shade: 'teal' }, { paneId: 'w2:p8', shade: 'rose' }]));
+  assert.equal(twice.get('w2:p8'), 'teal');
+  const many = Array.from({ length: 150 }, (_, i) => ({ paneId: `w1:p${i}`, shade: 'lime' }));
+  assert.equal(parseShades(shadeFile(many)).size, 100);
 });
 
 // -- installing over the human's own files ---------------------------------

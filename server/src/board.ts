@@ -10,6 +10,7 @@ import { asStatus, type Herdr, type PaneInfo } from './herdr.js';
 import type { History } from './history.js';
 import { notify } from './notify.js';
 import type { Projects } from './projects.js';
+import type { Shades } from './shades.js';
 import {
   Transcripts, activityOf, aliasDisproven, assignmentOf, contextOf, effortDisproven, effortOf, errorOf, goalOf, modelOf, todoOf, transcriptPathFor, type Entry,
 } from './transcript.js';
@@ -117,8 +118,6 @@ export class Board {
    * as a space that has been ordered — only agents that have been placed.
    */
   private locks = new Map<string, number>();
-  /** paneId → its hand-set tint. Applied in `agents()` — see the note there. */
-  private shades = new Map<string, AgentShade>();
   /**
    * paneId → the alias it was switched to from its header, which is the only
    * record that this agent is not on the machine default: the switch used to
@@ -132,8 +131,8 @@ export class Board {
    * the ask can show that (`aliasDisproven`). Disproven, it is deleted rather than
    * flagged — there is nothing left to say about a claim the agent has answered.
    *
-   * In memory and dropped with the pane, for the shade's reason. After a
-   * restart the meter falls back to the machine default and the peak-widening
+   * In memory and dropped with the pane, because Herdr recycles pane ids. After
+   * a restart the meter falls back to the machine default and the peak-widening
    * recovers the rest, which is the safe direction: 200k over-reports how full
    * a session is rather than hiding it.
    */
@@ -187,6 +186,8 @@ export class Board {
     private readonly herdr: Herdr,
     private readonly history: History,
     private readonly projects: Projects,
+    /** Each row's hand-set tint. Applied in `agents()` — see the note there. */
+    private readonly shades: Shades,
     private readonly onChange: () => void,
     /**
      * The session on this pane is over — the pane closed, or `/clear` started a
@@ -241,11 +242,12 @@ export class Board {
    * disk, so either held on the row would persist against a pane id Herdr
    * recycles and come back on whatever agent inherits it. Kept off the row,
    * RECENT carries neither by construction and `history.ts` needs to know
-   * nothing about any of this.
+   * nothing about any of this. The shade does persist, but in `shades.json`,
+   * which only ever tints a live row.
    */
   agents(): AgentRow[] {
     return arrange([...this.rows.values()].sort(compare), this.locks).map((row) => {
-      const shade = this.shades.get(row.paneId) ?? null;
+      const shade = this.shades.get(row.paneId);
       const locked = this.locks.has(row.paneId);
       const alias = this.aliasFor(row.paneId);
       // An unrefuted ask outranks the last request, which is the older of the
@@ -418,8 +420,7 @@ export class Board {
 
   /** Tints one row, or clears it with `null`. */
   setShade(paneId: string, shade: AgentShade | null): void {
-    if (shade === null) this.shades.delete(paneId);
-    else this.shades.set(paneId, shade);
+    this.shades.set(paneId, shade);
     this.onChange();
   }
 
@@ -658,9 +659,10 @@ export class Board {
       if (!old.stalled) this.history.remember(old);
       // Herdr recycles pane ids, so a trace kept past the pane it describes
       // would put a fork on whatever agent inherits the id next — and equally a
-      // shade, a dead agent's hold on a slot, or its model and level.
+      // dead agent's hold on a slot, or its model and level. Not the shade: a
+      // Herdr restart looks exactly like every pane going, and `Shades` is
+      // bounded by recency instead.
       this.forked.delete(paneId);
-      this.shades.delete(paneId);
       this.locks.delete(paneId);
       this.switchedTo.delete(paneId);
       this.startedBy.delete(paneId);

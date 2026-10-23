@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { MODELS, type SettingsView } from '@harness/shared';
+import { MODELS, type SettingsView, type UpdateView } from '@harness/shared';
 import { modelLabel, useApi } from './useHarness.js';
 
 /**
@@ -54,6 +54,7 @@ export function Settings({ onClose }: { onClose: () => void }): React.ReactEleme
       <header className="flex items-center gap-2 border-b border-neutral-800 px-3 py-1.5">
         <span className="text-neutral-300">settings</span>
         {view?.version && <span className="text-neutral-600">harness {view.version}</span>}
+        <Update onError={setError} />
         <button onClick={onClose} className="ml-auto text-neutral-400 hover:text-neutral-200">
           close
         </button>
@@ -96,6 +97,62 @@ export function Settings({ onClose }: { onClose: () => void }): React.ReactEleme
         )}
       </div>
     </div>
+  );
+}
+
+/**
+ * Whether npm has a newer harness, and moving onto it. Fetched apart from the
+ * view, so a registry that does not answer costs this line and nothing else.
+ *
+ * Nothing here waits for the restart: the server comes back as the new version
+ * and the socket's `hello` reloads the page, so `restarting` is the last thing
+ * this ever shows.
+ */
+function Update({ onError }: { onError: (message: string | null) => void }): React.ReactElement {
+  const { get, post } = useApi();
+  const [state, setState] = useState<UpdateView | null>(null);
+  const [phase, setPhase] = useState<'idle' | 'installing' | 'restarting'>('idle');
+
+  useEffect(() => {
+    get<UpdateView>('/api/update').then(setState, (e: Error) =>
+      setState({ latest: null, available: false, updatable: false, error: e.message }));
+  }, [get]);
+
+  const run = async (): Promise<void> => {
+    onError(null);
+    setPhase('installing');
+    try {
+      await post('/api/update');
+      setPhase('restarting');
+    } catch (e) {
+      setPhase('idle');
+      onError((e as Error).message);
+    }
+  };
+
+  if (state === null) return <span className="text-neutral-700">checking for updates…</span>;
+  if (state.latest === null) return <span className="text-neutral-700" title={state.error}>update check failed</span>;
+  if (!state.available) return <span className="text-neutral-700">up to date</span>;
+  if (!state.updatable) {
+    return (
+      <span className="text-neutral-600">
+        {state.latest} is out — this one runs from a checkout, so update it there
+      </span>
+    );
+  }
+  return (
+    <span className="flex items-center gap-2 text-neutral-400">
+      {phase === 'restarting' ? `installed ${state.latest}, restarting…` : `${state.latest} is out`}
+      {phase !== 'restarting' && (
+        <button
+          disabled={phase === 'installing'}
+          onClick={() => void run()}
+          className="rounded bg-neutral-800 px-2 py-0.5 text-neutral-200 disabled:opacity-40"
+        >
+          {phase === 'installing' ? 'installing…' : 'update'}
+        </button>
+      )}
+    </span>
   );
 }
 

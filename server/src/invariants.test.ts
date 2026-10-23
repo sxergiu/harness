@@ -27,6 +27,7 @@ import {
   windowFor, type Entry,
 } from './transcript.js';
 import { answerOf, digestOf } from './summary.js';
+import { install, isNewer, sameDir } from './update.js';
 import { cropPanel, limitsOf } from './usage.js';
 
 /**
@@ -1278,4 +1279,36 @@ test('a picked path comes back whole, without the separator osascript adds', () 
   assert.equal(pickedFrom('darwin', ok('/Users/a/repo/\n')), '/Users/a/repo');
   assert.equal(pickedFrom('darwin', ok('/\n')), '/');
   assert.equal(pickedFrom('linux', ok('/home/a/repo\n')), '/home/a/repo');
+});
+
+// -- updating ----------------------------------------------------------------
+// Both answers only ever hide or show a button, so a wrong one looks exactly
+// like being up to date, or like running from a checkout.
+
+test('VERSIONS COMPARE AS NUMBERS — 0.10.0 is newer than 0.9.0', () => {
+  assert.equal(isNewer('0.10.0', '0.9.0'), true);
+  assert.equal(isNewer('1.0.0', '0.99.99'), true);
+  assert.equal(isNewer('0.5.0', '0.5.0'), false);
+  assert.equal(isNewer('0.4.0', '0.5.0'), false, 'running ahead of the registry is not an update');
+  assert.equal(isNewer('0.5.0', '0.5.0-rc.1'), true, 'a release is newer than its prerelease');
+  assert.equal(isNewer('0.5.0-rc.1', '0.5.0'), false);
+  assert.equal(isNewer('latest', '0.5.0'), false);
+  assert.equal(isNewer('0.6.0', null), false);
+  assert.equal(isNewer(null, '0.5.0'), false);
+});
+
+test('A VERSION WITH A SHELL METACHARACTER NEVER REACHES npm — it goes to cmd.exe unquoted', async () => {
+  // Refused before anything is spawned, which is why this is safe to run.
+  for (const bad of ['1.0.0&calc', '1.0.0|x', '1.0.0^x', '1.0.0%PATH%', '1.0.0\n', '1.0.0 x']) {
+    await assert.rejects(install(bad), /not a version/, JSON.stringify(bad));
+    assert.equal(isNewer(bad, '0.5.0'), false, JSON.stringify(bad));
+  }
+});
+
+test('the global install is recognised on Windows whatever the case and slashes', () => {
+  const global = 'C:\\Users\\x\\AppData\\Roaming\\npm\\node_modules\\@sxergiu\\harness';
+  assert.equal(sameDir(global, 'c:/users/x/appdata/roaming/npm/node_modules/@sxergiu/harness/', 'win32'), true);
+  assert.equal(sameDir(global, 'C:\\Users\\x\\repos\\harness', 'win32'), false, 'a checkout is not the install');
+  assert.equal(sameDir('/usr/lib/node_modules/@sxergiu/harness', '/usr/lib/node_modules/@sxergiu/Harness', 'linux'), false);
+  assert.equal(sameDir('/usr/lib/node_modules/@sxergiu/harness', '/usr/lib/node_modules/@sxergiu/harness/', 'linux'), true);
 });

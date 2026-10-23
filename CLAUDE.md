@@ -442,6 +442,11 @@ server/src/
                       and the run fork its ▶ runs go to
   notify.ts           osascript + afplay, plus a Herdr toast
   instance.ts         the single-instance lock, and where to point the browser
+  update.ts           npm's latest version, and installing it over a GLOBAL install
+                      only. The route restarts into it, spawning the successor
+                      after the port is closed and the lock released — any earlier
+                      and it defers to us (invariant 15). Tabs reload on a `hello`
+                      whose version differs from their first
   origin.ts           who may talk to an unauthenticated server. THE security boundary
   picker.ts           the OS folder dialog a space's directory is chosen with, opened
                       by this process since a page never learns an absolute path.

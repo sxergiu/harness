@@ -62,16 +62,23 @@ async function claude(args: string[]): Promise<string> {
  * `execFile` neither resolves PATHEXT nor will run a `.cmd` without a shell —
  * measured as ENOENT, which the panel reports as `not on PATH` on a machine
  * where `where claude` finds it. So it goes through `cmd.exe`, which does both.
- * Safe only because every caller passes literals: nothing here is quoted, and
- * the one string from another process (the email) never reaches this function.
+ * `npm` is `npm.cmd` there too, which is why `update.ts` comes through here.
+ * Safe only because nothing a caller passes needs quoting: these are literals,
+ * the one string from another process (the email) never reaches this function,
+ * and the version `update.ts` passes is checked against a shape with no shell
+ * metacharacter in it.
  */
-export function claudeCommand(
-  args: string[], platform: NodeJS.Platform = process.platform,
+export function shimCommand(
+  name: string, args: string[], platform: NodeJS.Platform = process.platform,
 ): [string, string[]] {
   return platform === 'win32'
-    ? ['cmd.exe', ['/d', '/s', '/c', 'claude', ...args]]
-    : ['claude', args];
+    ? ['cmd.exe', ['/d', '/s', '/c', name, ...args]]
+    : [name, args];
 }
+
+export const claudeCommand = (
+  args: string[], platform: NodeJS.Platform = process.platform,
+): [string, string[]] => shimCommand('claude', args, platform);
 
 /** Whatever the CLI said went wrong, in the fewest words that still locate it. */
 function reason(err: unknown): string {

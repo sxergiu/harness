@@ -11,11 +11,13 @@ import { promisify } from 'node:util';
  * which `shutdown` calls because `app.close()` waits on requests in flight, and
  * a dialog left open would otherwise hold the process up forever.
  *
- * Nothing here has been watched answering. On Windows the shim compiles under
- * PowerShell 5.1 and the script runs up to the dialog; the dialog itself has not
- * been opened. macOS and Linux are written from their tools' documented
- * behaviour — osascript's `-128` cancel, zenity's exit 1 — and `pickedFrom` is
- * pinned in the tests because those tests are the only evidence they have.
+ * On macOS the dialog has been opened from a background process and seen to
+ * come to the front, and seen to outlive a killed osascript; its answers have
+ * not been watched. On Windows the shim compiles under PowerShell 5.1 and the
+ * script runs up to the dialog; the dialog itself has not been opened. The
+ * answers are written from the tools' documented behaviour — osascript's
+ * `-128` cancel, zenity's exit 1 — and `pickedFrom` is pinned in the tests
+ * because those tests are the only evidence they have.
  */
 
 const execFileAsync = promisify(execFile);
@@ -51,7 +53,13 @@ export async function pickDir(): Promise<string | null> {
         if (err.code === 'ENOENT') throw new Error(`${file} is not available`);
         // A tab closed or a shutdown: nobody is waiting for an answer, and
         // logging it would put a false failure in the bug-report log.
-        if (controller.signal.aborted) return null;
+        if (controller.signal.aborted) {
+          // The dialog lives in System Events, so killing osascript leaves it on
+          // screen (measured). Quitting it is the only close there is without an
+          // accessibility grant, and it relaunches when next asked for.
+          if (platform === 'darwin') execFile('osascript', ['-e', 'quit app "System Events"'], () => {});
+          return null;
+        }
         // Killed by a signal. Not `err` itself, whose message is the whole
         // command line — several KB of base64 on Windows.
         if (typeof err.code !== 'number') {
@@ -77,7 +85,19 @@ function pickerCommand(platform: NodeJS.Platform): [string, string[]] {
         '-EncodedCommand', Buffer.from(WINDOWS_SCRIPT, 'utf16le').toString('base64'),
       ]];
     case 'darwin':
-      return ['osascript', ['-e', `POSIX path of (choose folder with prompt "${TITLE}")`]];
+      // Hosted by System Events, because osascript's own dialog opens BEHIND the
+      // browser: measured on macOS 26, a server cannot bring itself forward,
+      // `activate` or not, while System Events' `activate` does. The timeout is
+      // because a reply from another app otherwise gives up after 2 minutes,
+      // leaving the dialog up with nobody waiting on it.
+      return ['osascript', [
+        '-e', 'with timeout of 86400 seconds',
+        '-e', 'tell application "System Events"',
+        '-e', 'activate',
+        '-e', `POSIX path of (choose folder with prompt "${TITLE}")`,
+        '-e', 'end tell',
+        '-e', 'end timeout',
+      ]];
     default:
       return ['zenity', ['--file-selection', '--directory', `--title=${TITLE}`]];
   }

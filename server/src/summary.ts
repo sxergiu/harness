@@ -11,12 +11,18 @@ import { Transcripts, feedTurns, transcriptPathFor } from './transcript.js';
 
 /**
  * A short running brief of each conversation — discussed, decided, open —
- * rewritten after every finished turn by an agent of our own, so the agent
- * doing the work spends nothing on it.
+ * rewritten by an agent of our own, so the agent doing the work spends nothing
+ * on it.
+ *
+ * ONLY WHILE SOMEBODY IS READING IT. Each update is a haiku turn billed to the
+ * account whose limit bars sit under the board, so it is brought up to date when
+ * its tab asks (`follow`), never off the board's heartbeat: ten busy agents
+ * would otherwise keep a summarizer running all day on conversations nobody
+ * opened. A failed job stops the automatic updates for that session until ↻,
+ * because what fails one job — a dialog, a signed-out account — fails the next.
  *
  * `usage.ts`'s shape: one warm pane in `~/.harness`, hidden from the board and
- * closed with the cockpit. It is the one per-turn cost the cockpit adds, which
- * is why it runs on haiku and handles one job at a time.
+ * closed with the cockpit. It runs on haiku and handles one job at a time.
  *
  * THE SERVER WRITES THE FILE, NOT THE AGENT. The agent is started with the Read
  * tool alone, reads the digest, and answers with the markdown, which is lifted
@@ -153,6 +159,18 @@ export class Summaries {
 
   constructor(private readonly herdr: Herdr, private readonly board: Board) {}
 
+  /**
+   * The tab's read: queues an update when there are turns the summary has not
+   * folded in, and nothing otherwise — it is asked on every tick the tab is
+   * open, so an idle conversation must cost no job and flash no spinner.
+   */
+  follow(paneId: string): void {
+    const uuid = this.board.row(paneId)?.sessionUuid;
+    if (uuid && this.failed.has(uuid)) return;
+    if (this.pending.has(paneId) || this.running === paneId) return;
+    if (this.work(paneId, false)) this.request(paneId);
+  }
+
   request(paneId: string, force = false): void {
     if (this.closed) return;
     this.pending.add(paneId);
@@ -203,17 +221,24 @@ export class Summaries {
     }
   }
 
-  private async job(paneId: string, force: boolean): Promise<void> {
-    // Re-read now rather than when queued: the session may have been cleared
-    // or its transcript pruned while the job waited.
+  /** What a job on this pane would summarise, or null when there is nothing new. */
+  private work(paneId: string, force: boolean) {
     const row = this.board.row(paneId);
     const uuid = row?.sessionUuid;
-    if (!row || !uuid || !row.transcriptPath || !UUID.test(uuid)) return;
+    if (!row || !uuid || !row.transcriptPath || !UUID.test(uuid)) return null;
 
     const since = force ? 0 : summarizedTurns(uuid);
     const settled = row.status === 'idle' || row.status === 'done';
     const digest = digestOf(feedTurns(this.board.entries(paneId), row.cwd), since, settled);
-    if (!digest) return;
+    return digest && { row, uuid, digest };
+  }
+
+  private async job(paneId: string, force: boolean): Promise<void> {
+    // Re-read now rather than when queued: the session may have been cleared
+    // or its transcript pruned while the job waited.
+    const work = this.work(paneId, force);
+    if (!work) return;
+    const { row, uuid, digest } = work;
 
     mkdirSync(DIR, { recursive: true });
     const previous = force ? null : readSummary(uuid)?.text ?? null;

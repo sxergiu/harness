@@ -449,7 +449,8 @@ server/src/
                       stalled on API timeouts. Why it works is inferred; that it
                       works is the human's observation. The timeouts reach no
                       transcript, so the others' recovery is never observed, and
-                      the pane is never reused, the fresh process being the point
+                      the pane is never reused, the fresh process being the point.
+                      It runs on haiku, since every ↻ press spends its turn
   account.ts          which Claude account is being spent, and switching to another.
                       Drives the `claude auth` commands; handles no credentials
   summary.ts          each conversation's running brief, brought up to date by a

@@ -28,9 +28,18 @@ const PATH = join(homedir(), '.harness', 'projects.json');
  */
 const VERSION = 1;
 
-interface Checkout {
+/**
+ * `autoAccept` arrived without a bump, and needed none: an older reader checks
+ * `gitDelegated === true` and nothing else, so it reads an auto-accept-only
+ * entry as no grant at all — the refusing direction.
+ */
+export interface Checkout {
   gitDelegated: boolean;
+  /** Agents started here run with `--permission-mode bypassPermissions`. */
+  autoAccept: boolean;
 }
+
+const NONE: Checkout = { gitDelegated: false, autoAccept: false };
 
 export class Projects {
   private checkouts = new Map<string, Checkout>();
@@ -42,17 +51,19 @@ export class Projects {
   }
 
   /**
-   * Whether agents started in this checkout are told they may commit and push.
-   * Everything not granted is refused, including anything this store could not
-   * make sense of.
+   * What agents started in this checkout may do without asking: commit and
+   * push, and skip every permission prompt. Everything not granted is refused,
+   * including anything this store could not make sense of.
    */
-  gitDelegated(dir: string): boolean {
-    return this.checkouts.get(resolve(dir))?.gitDelegated ?? false;
+  grantOf(dir: string): Checkout {
+    return this.checkouts.get(resolve(dir)) ?? NONE;
   }
 
-  setGitDelegated(dir: string, on: boolean): void {
+  /** Changes only the grants `patch` names. */
+  setGrant(dir: string, patch: Partial<Checkout>): void {
     const path = resolve(dir);
-    if (on) this.checkouts.set(path, { gitDelegated: true });
+    const next = { ...this.grantOf(path), ...patch };
+    if (next.gitDelegated || next.autoAccept) this.checkouts.set(path, next);
     // A revoked grant leaves nothing behind: the entry IS the grant, and an
     // empty record would only accumulate paths the human has finished with.
     else this.checkouts.delete(path);
@@ -60,9 +71,9 @@ export class Projects {
   }
 
   /** Every checkout the human has decided something about. For the settings screen. */
-  all(): Array<{ path: string; gitDelegated: boolean }> {
+  all(): Array<{ path: string } & Checkout> {
     return [...this.checkouts]
-      .map(([path, c]) => ({ path, gitDelegated: c.gitDelegated }))
+      .map(([path, c]) => ({ path, ...c }))
       .sort((a, b) => a.path.localeCompare(b.path));
   }
 
@@ -98,8 +109,9 @@ export function parse(text: string): Map<string, Checkout> {
     // Relative keys cannot be matched against a resolved lookup, so a file that
     // holds one was not written by us.
     if (path !== resolve(path)) continue;
-    const granted = (value as { gitDelegated?: unknown } | null)?.gitDelegated;
-    if (granted === true) out.set(path, { gitDelegated: true });
+    const v = value as Partial<Record<keyof Checkout, unknown>> | null;
+    const grant = { gitDelegated: v?.gitDelegated === true, autoAccept: v?.autoAccept === true };
+    if (grant.gitDelegated || grant.autoAccept) out.set(path, grant);
   }
   return out;
 }

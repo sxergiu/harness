@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { aliasRuns, type AgentRow, type ServerEvent, type WorkspaceRow } from '@harness/shared';
+import {
+  aliasRuns, type AgentRow, type Prefs, type ServerEvent, type WorkspaceRow,
+} from '@harness/shared';
 
 export interface HarnessState {
   workspaces: WorkspaceRow[];
@@ -13,12 +15,14 @@ export interface HarnessState {
   connected: boolean;
   /** The harness was quit on purpose, so a dropped socket is the end and not a blip. */
   quit: boolean;
+  /** Null until the first `hello` — the switches then keep what the page started with. */
+  prefs: Prefs | null;
 }
 
 const EMPTY: HarnessState = {
   workspaces: [], agents: [], recent: [],
   herdrConnected: false, herdrError: null, herdrWarning: null, connected: false,
-  quit: false,
+  quit: false, prefs: null,
 };
 
 /**
@@ -125,7 +129,12 @@ function reduce(s: HarnessState, e: ServerEvent): HarnessState {
         workspaces: e.workspaces, agents: e.agents, recent: e.recent,
         herdrConnected: e.herdrConnected, herdrError: null,
         herdrWarning: s.herdrWarning, connected: true, quit: false,
+        // Absent from an older server's hello — which a dev page meets whenever
+        // it defers to a running global install.
+        prefs: e.prefs ?? null,
       };
+    case 'prefs':
+      return { ...s, prefs: e.prefs };
     case 'agents':
       return { ...s, agents: e.agents, workspaces: e.workspaces };
     case 'recent':

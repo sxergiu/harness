@@ -36,16 +36,21 @@ export function Settings({ onClose }: { onClose: () => void }): React.ReactEleme
 
   useEffect(() => { void load(); }, []);
 
-  /** Every write answers with the new view, so there is nothing to refetch. */
-  const write = async (path: string, body?: unknown): Promise<void> => {
+  /**
+   * Every write answers with the new view, so there is nothing to refetch.
+   * Resolves to whether it took, for a field that should outlive a refusal.
+   */
+  const write = async (path: string, body?: unknown): Promise<boolean> => {
     setError(null);
     setNote(null);
     try {
       const next = await post<SettingsView & { note?: string }>(path, body);
       setView(next);
       if (next.note) setNote({ from: path, text: next.note });
+      return true;
     } catch (e) {
       setError((e as Error).message);
+      return false;
     }
   };
 
@@ -75,8 +80,8 @@ export function Settings({ onClose }: { onClose: () => void }): React.ReactEleme
             />
             <Checkouts
               view={view}
-              onRevoke={(path) =>
-                void write('/api/settings/checkouts', { path, gitDelegated: false })}
+              onRevoke={(path, grant) =>
+                void write('/api/settings/checkouts', { path, [grant]: false })}
             />
             <ClaudeFiles
               view={view}
@@ -86,6 +91,11 @@ export function Settings({ onClose }: { onClose: () => void }): React.ReactEleme
               view={view}
               note={noteOf('/api/settings/permissions')}
               onGrant={() => void write('/api/settings/permissions')}
+            />
+            <Directories
+              view={view}
+              onError={setError}
+              onSet={(path, allow) => write('/api/settings/directories', { path, allow })}
             />
             <HerdrRule
               view={view}
@@ -333,33 +343,50 @@ function MachineDefault(
  * session, and this list does.
  */
 function Checkouts(
-  { view, onRevoke }: { view: SettingsView; onRevoke: (path: string) => void },
+  { view, onRevoke }: {
+    view: SettingsView;
+    onRevoke: (path: string, grant: 'gitDelegated' | 'autoAccept') => void;
+  },
 ): React.ReactElement {
   return (
     <Section
       title="CHECKOUTS"
-      note="Where agents may commit and push. Granted per checkout from ✎ on a space, so every space pointed at one shares it, and read when an agent starts — revoking changes nothing for agents already running."
+      note="Where agents may commit and push, and where they are never asked for permission. Granted per checkout from ✎ on a space, so every space pointed at one shares it, and read when an agent starts — revoking changes nothing for agents already running."
     >
       {view.checkouts.length === 0 ? (
         <div className="text-neutral-600">
-          Nothing delegated. Agents are told never to commit or push.
+          Nothing granted. Agents are told never to commit or push, and ask before what your
+          settings do not allow.
         </div>
       ) : (
         /*
           A list with a revoke, not a row of checkboxes: the store holds only
-          the checkouts that ARE delegated — a revoke deletes the entry — so
-          every box would be ticked and the only move available is off.
+          the grants that ARE given — revoking the last one deletes the entry —
+          so every box would be ticked and the only move available is off.
         */
         view.checkouts.map((c) => (
-          <div key={c.path} className="group/co flex items-center gap-2 py-0.5">
+          <div key={c.path} className="flex items-center gap-2 py-0.5">
             <span className="truncate font-mono text-neutral-400">{c.path}</span>
-            <button
-              onClick={() => onRevoke(c.path)}
-              title="Agents started here are told never to commit or push again"
-              className="ml-auto shrink-0 text-neutral-600 opacity-0 group-hover/co:opacity-100 hover:text-amber-400"
-            >
-              revoke
-            </button>
+            <span className="ml-auto flex shrink-0 gap-2">
+              {c.gitDelegated && (
+                <button
+                  onClick={() => onRevoke(c.path, 'gitDelegated')}
+                  title="Revoke: agents started here are told never to commit or push again"
+                  className="text-neutral-500 hover:text-amber-400"
+                >
+                  git ×
+                </button>
+              )}
+              {c.autoAccept && (
+                <button
+                  onClick={() => onRevoke(c.path, 'autoAccept')}
+                  title="Revoke: agents started here ask for permission again"
+                  className="text-neutral-500 hover:text-amber-400"
+                >
+                  auto-accept ×
+                </button>
+              )}
+            </span>
           </div>
         ))
       )}
@@ -459,6 +486,102 @@ function Permissions(
         </button>
       </div>
       {note && <div className="mt-1 text-neutral-400">{note}</div>}
+    </Section>
+  );
+}
+
+/**
+ * Folders outside an agent's own checkout that it may use without asking.
+ * Only the cockpit's own entries can be removed here: the rest are the human's,
+ * written into that file by hand, and taking one away from this screen would be
+ * an edit they never made.
+ */
+function Directories(
+  { view, onError, onSet }: {
+    view: SettingsView;
+    onError: (message: string | null) => void;
+    onSet: (path: string, allow: boolean) => Promise<boolean>;
+  },
+): React.ReactElement {
+  const { post } = useApi();
+  const [path, setPath] = useState('');
+  const [browsing, setBrowsing] = useState(false);
+  const { status, entries } = view.directories;
+
+  /** Fills the field and nothing more, as the space editor's does. */
+  const browse = async (): Promise<void> => {
+    onError(null);
+    setBrowsing(true);
+    try {
+      const { dir } = await post<{ dir: string | null }>('/api/pick-dir');
+      if (dir !== null) setPath(dir);
+    } catch (e) {
+      onError((e as Error).message);
+    } finally {
+      setBrowsing(false);
+    }
+  };
+
+  const add = async (): Promise<void> => {
+    if (path.trim() && await onSet(path.trim(), true)) setPath('');
+  };
+
+  return (
+    <Section
+      title="FOLDERS"
+      note="Folders outside their own checkout that agents may read and write without asking — permissions.additionalDirectories in the file above. Applies to every agent on this machine, including ones started by hand; one already running may not see a change until it restarts."
+    >
+      {status === 'unreadable' ? (
+        <div className="text-amber-400">not a list this can merge into — left alone</div>
+      ) : entries.length === 0 ? (
+        <div className="text-neutral-600">None. Agents ask before touching anything outside their checkout.</div>
+      ) : (
+        entries.map((e) => (
+          <div key={e.path} className="flex items-center gap-2 py-0.5">
+            <span className="truncate font-mono text-neutral-400">{e.path}</span>
+            <span className="ml-auto shrink-0">
+              {!e.ours ? (
+                <span className="text-neutral-600" title="Written into your settings by hand, so not the cockpit's to remove">
+                  yours
+                </span>
+              ) : (
+                <button
+                  onClick={() => void onSet(e.path, false)}
+                  className="text-neutral-500 hover:text-amber-400"
+                  title={e.present ? 'Agents ask before touching it again' : 'Forget it — something already took it out of your settings'}
+                >
+                  {e.present ? 'remove' : 'gone from settings — forget'}
+                </button>
+              )}
+            </span>
+          </div>
+        ))
+      )}
+      {status === 'ok' && (
+        <div className="mt-1 flex gap-1">
+          <input
+            value={path}
+            onChange={(e) => setPath(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') void add(); }}
+            placeholder="an absolute path"
+            className="min-w-0 flex-1 rounded border border-neutral-800 bg-neutral-950 px-1 py-0.5 font-mono text-neutral-300"
+          />
+          <button
+            disabled={browsing}
+            onClick={() => void browse()}
+            className="shrink-0 text-neutral-500 hover:text-neutral-300 disabled:opacity-40"
+          >
+            {browsing ? 'choosing…' : 'browse…'}
+          </button>
+          <button
+            disabled={!path.trim()}
+            onClick={() => void add()}
+            className="shrink-0 rounded bg-neutral-800 px-2 py-0.5 text-neutral-200 disabled:opacity-40"
+          >
+            allow
+          </button>
+        </div>
+      )}
     </Section>
   );
 }

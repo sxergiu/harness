@@ -30,8 +30,8 @@ export function App(): React.ReactElement {
   const [refreshing, setRefreshing] = useState(false);
   /** The OS folder dialog is up, waiting on the human — see `newSpace`. */
   const [picking, setPicking] = useState(false);
-  const { theme, toggle: toggleTheme } = useTheme();
-  const copyOnSelect = useCopyOnSelect();
+  const { theme, toggle: toggleTheme } = useTheme(state.prefs);
+  const copyOnSelect = useCopyOnSelect(state.prefs);
   /**
    * Held here rather than in the agent view: the panel is docked to this column,
    * and the agent view remounts on every `/clear`, which would drop it.
@@ -817,6 +817,8 @@ interface SpaceGroup {
   dir: string | null;
   /** Whether agents started here may commit and push. A fact about `dir`. */
   gitDelegated: boolean;
+  /** Whether agents started here skip every permission prompt. Also about `dir`. */
+  autoAccept: boolean;
   /** False for the catch-all group, which Herdr has no workspace for. */
   editable: boolean;
   agents: AgentRow[];
@@ -839,6 +841,7 @@ function groupBySpace(agents: AgentRow[], workspaces: WorkspaceRow[]): SpaceGrou
     label: w.label ?? String(w.number),
     dir: w.dir,
     gitDelegated: w.gitDelegated,
+    autoAccept: w.autoAccept,
     editable: true,
     agents: byWorkspace.get(w.id) ?? [],
   }));
@@ -851,6 +854,7 @@ function groupBySpace(agents: AgentRow[], workspaces: WorkspaceRow[]): SpaceGrou
       label: 'no space',
       dir: null,
       gitDelegated: false,
+      autoAccept: false,
       editable: false,
       agents: orphans,
     });
@@ -916,25 +920,25 @@ function Space(
     }
   };
 
-  const save = async (label: string, dir: string, gitDelegated: boolean): Promise<void> => {
+  const save = async (label: string, dir: string, grant: Grant): Promise<void> => {
     setBusy(true);
     setError(null);
     try {
       if (label && label !== group.label) {
         await post(`/api/workspaces/${group.id}/rename`, { label });
       }
-      // The grant rides on the dir route, so a tick with no path change still
+      // The grants ride on the dir route, so a tick with no path change still
       // has to go — testing the dir alone would make the checkbox a control
-      // that silently does nothing. But it goes ONLY when the box itself moved:
-      // the checkbox was seeded from the old directory's grant, so sending it
+      // that silently does nothing. But each goes ONLY when its box moved: the
+      // checkbox was seeded from the old directory's grant, so sending it
       // alongside a new path would decide that path's permissions from a fact
       // about a different checkout. Omitted, the server leaves the grant alone.
-      const granted = gitDelegated !== group.gitDelegated;
-      if (dir && (dir !== group.dir || granted)) {
-        await post(`/api/workspaces/${group.id}/dir`, {
-          dir,
-          ...(granted ? { gitDelegated } : {}),
-        });
+      const moved: Partial<Grant> = {
+        ...(grant.gitDelegated !== group.gitDelegated ? { gitDelegated: grant.gitDelegated } : {}),
+        ...(grant.autoAccept !== group.autoAccept ? { autoAccept: grant.autoAccept } : {}),
+      };
+      if (dir && (dir !== group.dir || Object.keys(moved).length > 0)) {
+        await post(`/api/workspaces/${group.id}/dir`, { dir, ...moved });
       }
       setEditing(false);
     } catch (e) {
@@ -1016,11 +1020,11 @@ function Space(
         <SpaceEditor
           label={group.label}
           dir={group.dir ?? ''}
-          gitDelegated={group.gitDelegated}
+          grant={{ gitDelegated: group.gitDelegated, autoAccept: group.autoAccept }}
           busy={busy}
           onError={setError}
           onCancel={() => { setEditing(false); setError(null); }}
-          onSave={(label, dir, gitDelegated) => void save(label, dir, gitDelegated)}
+          onSave={(label, dir, grant) => void save(label, dir, grant)}
         />
       ) : (
         <div className="flex items-center gap-1 rounded px-1 py-0.5 hover:bg-neutral-900">
@@ -1044,6 +1048,14 @@ function Space(
                 title="git is delegated in this checkout — agents started here may commit and push"
               >
                 git
+              </span>
+            )}
+            {group.autoAccept && (
+              <span
+                className="shrink-0 text-neutral-400"
+                title="auto-accept is on in this checkout — agents started here are never asked for permission"
+              >
+                auto
               </span>
             )}
             {/* Collapsing hides rows, so attention has to survive on the header. */}
@@ -1132,17 +1144,23 @@ function Space(
   );
 }
 
+/** What a checkout grants the agents started in it. */
+interface Grant {
+  gitDelegated: boolean;
+  autoAccept: boolean;
+}
+
 /**
  * A space is a name, a directory, and what agents started there are allowed to
- * do with git. Edited in the row itself.
+ * do without asking. Edited in the row itself.
  */
 function SpaceEditor(
-  { label, dir, gitDelegated, busy, onSave, onError, onCancel }: {
+  { label, dir, grant, busy, onSave, onError, onCancel }: {
     label: string;
     dir: string;
-    gitDelegated: boolean;
+    grant: Grant;
     busy: boolean;
-    onSave: (label: string, dir: string, gitDelegated: boolean) => void;
+    onSave: (label: string, dir: string, grant: Grant) => void;
     onError: (message: string | null) => void;
     onCancel: () => void;
   },
@@ -1150,7 +1168,7 @@ function SpaceEditor(
   const { post } = useApi();
   const [nextLabel, setNextLabel] = useState(label);
   const [nextDir, setNextDir] = useState(dir);
-  const [nextGit, setNextGit] = useState(gitDelegated);
+  const [nextGrant, setNextGrant] = useState(grant);
   const [browsing, setBrowsing] = useState(false);
 
   /** Fills the field and nothing more: the pick is saved like a typed path. */
@@ -1168,7 +1186,7 @@ function SpaceEditor(
   };
 
   const keys = (e: React.KeyboardEvent): void => {
-    if (e.key === 'Enter') onSave(nextLabel.trim(), nextDir.trim(), nextGit);
+    if (e.key === 'Enter') onSave(nextLabel.trim(), nextDir.trim(), nextGrant);
     if (e.key === 'Escape') onCancel();
   };
 
@@ -1209,8 +1227,8 @@ function SpaceEditor(
       <label className="mt-1 flex cursor-pointer items-start gap-1.5 px-1 py-0.5 text-neutral-400 hover:text-neutral-200">
         <input
           type="checkbox"
-          checked={nextGit}
-          onChange={(e) => setNextGit(e.target.checked)}
+          checked={nextGrant.gitDelegated}
+          onChange={(e) => setNextGrant((g) => ({ ...g, gitDelegated: e.target.checked }))}
           className="mt-0.5 shrink-0"
         />
         <span>
@@ -1221,12 +1239,28 @@ function SpaceEditor(
           </span>
         </span>
       </label>
+      {/* The warning is the setting's whole cost, so it is on screen beside the box. */}
+      <label className="flex cursor-pointer items-start gap-1.5 px-1 py-0.5 text-neutral-400 hover:text-neutral-200">
+        <input
+          type="checkbox"
+          checked={nextGrant.autoAccept}
+          onChange={(e) => setNextGrant((g) => ({ ...g, autoAccept: e.target.checked }))}
+          className="mt-0.5 shrink-0"
+        />
+        <span>
+          accept everything automatically
+          <span className="block text-neutral-600">
+            agents started here run with bypassPermissions and are never asked before an edit, a
+            command or a fetch. Ticking it also accepts Claude Code's bypass-mode warning for you
+          </span>
+        </span>
+      </label>
       <div className="mt-1 flex justify-end gap-2">
         <button className="text-neutral-500 hover:text-neutral-300" onClick={onCancel}>cancel</button>
         <button
           disabled={busy}
           className="text-neutral-300 hover:text-neutral-100 disabled:opacity-40"
-          onClick={() => onSave(nextLabel.trim(), nextDir.trim(), nextGit)}
+          onClick={() => onSave(nextLabel.trim(), nextDir.trim(), nextGrant)}
         >
           save
         </button>

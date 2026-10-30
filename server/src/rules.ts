@@ -125,9 +125,15 @@ export const flatten = (prompt: string): string => prompt
  * here as well would be two reads of one file that are free to disagree, and
  * the pane would then be remembered as running something it was never given.
  * Still read per start — by the route, one line up.
+ *
+ * `autoAccept` comes from the same per-checkout grant, and is no more enforced
+ * than the rest: it removes every prompt, so whatever the rules forbid an agent
+ * started with it can still do without anybody being asked.
  */
-export function startArgs(gitDelegated: boolean, alias: string | null): string[] {
-  return argsFor(rulesFor(rulesText(), gitDelegated), alias);
+export function startArgs(
+  grant: { gitDelegated: boolean; autoAccept: boolean }, alias: string | null,
+): string[] {
+  return argsFor(rulesFor(rulesText(), grant.gitDelegated), alias, grant.autoAccept);
 }
 
 /**
@@ -140,10 +146,11 @@ export function startArgs(gitDelegated: boolean, alias: string | null): string[]
  * `claudeFiles.ts`), so the level agents start at is whatever the human's own
  * `~/.claude/settings.json` says — the same as an agent started by hand.
  */
-export function argsFor(prompt: string, model: string | null): string[] {
+export function argsFor(prompt: string, model: string | null, bypass: boolean): string[] {
   return [
     '--append-system-prompt', flatten(prompt),
     ...(model === null ? [] : ['--model', model]),
+    ...(bypass ? ['--permission-mode', 'bypassPermissions'] : []),
   ];
 }
 

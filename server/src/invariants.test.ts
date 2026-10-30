@@ -7,7 +7,8 @@ import { parse as parseAccounts, rowFor, statusOf } from './account.js';
 import { ASIDE_PREFIX, RUN_FORK, asideName } from './aside.js';
 import { dormantSession, launchStalled, seedCwd } from './board.js';
 import {
-  HOLD_MS, decide, grantOf, holdFor, mayTrust, pinAction, settleAction, trustKey,
+  HOLD_MS, decide, directoriesIn, grantOf, holdFor, mayTrust, pinAction, settleAction, trustKey,
+  withDirectory,
 } from './claudeFiles.js';
 import { buildAgentDiff, endingIn, within } from './diff.js';
 import {
@@ -19,6 +20,7 @@ import { isOurs, merge, versionOf } from './herdrRules.js';
 import { shouldOpen, type Running } from './instance.js';
 import { admits, isLocal } from './origin.js';
 import { pickedFrom } from './picker.js';
+import { merge as mergePrefs, parse as parsePrefs } from './prefs.js';
 import { parse } from './projects.js';
 import { argsFor, DEFAULT_RULES, flatten, modelFrom, resumeArgs, rulesFor, runArgs } from './rules.js';
 import { parse as parseShades } from './shades.js';
@@ -524,10 +526,20 @@ test('the two limit bars are read', () => {
 // against the wrong model is a percentage that is simply too low.
 
 test('no stored model means no flag at all', () => {
-  assert.deepEqual(argsFor('RULES', null), ['--append-system-prompt', 'RULES']);
+  assert.deepEqual(argsFor('RULES', null, false), ['--append-system-prompt', 'RULES']);
   assert.deepEqual(
-    argsFor('RULES', 'sonnet[1m]'),
+    argsFor('RULES', 'sonnet[1m]', false),
     ['--append-system-prompt', 'RULES', '--model', 'sonnet[1m]'],
+  );
+});
+
+test('only an auto-accept checkout starts its agents with no permission prompts', () => {
+  // An agent wrongly started in bypass mode looks exactly like any other on the
+  // board — the first sign is something done that nobody was asked about.
+  assert.ok(!argsFor('RULES', 'opus', false).includes('--permission-mode'));
+  assert.deepEqual(
+    argsFor('RULES', null, true),
+    ['--append-system-prompt', 'RULES', '--permission-mode', 'bypassPermissions'],
   );
 });
 
@@ -535,7 +547,7 @@ test('the system prompt carries no straight double quote', () => {
   // Windows PowerShell 5.1 does not escape one inside a native argument, so it
   // ends the argument there and drops everything after — the git amendment
   // included — with nothing anywhere saying so.
-  const [, prompt] = argsFor(rulesFor(DEFAULT_RULES, true), null);
+  const [, prompt] = argsFor(rulesFor(DEFAULT_RULES, true), null, false);
   assert.ok(!prompt.includes('"'));
   assert.ok(prompt.endsWith('Nothing here extends to any other checkout.'));
   assert.equal(flatten('a ("was X, now Y") b "c'), 'a (“was X, now Y”) b ”c');
@@ -836,6 +848,43 @@ test('a store it cannot make sense of yields NO grants, and never throws', () =>
 
 test('a store it CAN read still grants — the refusals above are not just a broken parse', () => {
   assert.equal(parse(stored(true)).size, 1);
+});
+
+test('auto-accept is a grant of its own, and fails closed the same way', () => {
+  const key = resolve('/a');
+  const one = (grant: object): string => JSON.stringify({ version: 1, checkouts: { [key]: grant } });
+  // A file written before the field existed keeps its git grant and gains nothing.
+  assert.deepEqual(parse(one({ gitDelegated: true })).get(key), { gitDelegated: true, autoAccept: false });
+  assert.deepEqual(parse(one({ autoAccept: true })).get(key), { gitDelegated: false, autoAccept: true });
+  assert.equal(parse(one({ autoAccept: 'yes' })).size, 0);
+});
+
+test('the folder list only appends, removes every spelling of one, and keeps the rest', () => {
+  const mine = { theme: 'dark', permissions: { allow: ['Bash'], additionalDirectories: ['C:\\Users\\me'] } };
+  const added = withDirectory(mine, 'C:\\work', true, 'win32')!;
+  assert.deepEqual(added, {
+    theme: 'dark',
+    permissions: { allow: ['Bash'], additionalDirectories: ['C:\\Users\\me', 'C:\\work'] },
+  });
+  // Claude Code's own spelling of the same folder is the same folder.
+  assert.deepEqual(withDirectory(added, 'c:/WORK/', true, 'win32'), added);
+  assert.deepEqual(withDirectory(added, 'c:/work', false, 'win32'), mine);
+  assert.deepEqual(withDirectory({}, '/w', true, 'darwin'), { permissions: { additionalDirectories: ['/w'] } });
+  // A shape we would have to guess about is never written over.
+  assert.equal(withDirectory({ permissions: { additionalDirectories: '/w' } }, '/x', true, 'darwin'), null);
+  assert.equal(directoriesIn({ permissions: { additionalDirectories: [1] } }), null);
+});
+
+test('a pref it cannot read is never chosen, and the rest still apply', () => {
+  const none = { theme: null, copyOnSelect: null };
+  assert.deepEqual(parsePrefs('{"version":1,"theme":"light","copyOnSelect":"on"}'), { theme: 'light', copyOnSelect: null });
+  assert.deepEqual(parsePrefs('{"version":2,"theme":"light"}'), none);
+  assert.deepEqual(parsePrefs('[]'), none);
+  // A patch changes only what it names, and a `version` in it is not a pref.
+  assert.deepEqual(
+    mergePrefs({ theme: 'dark', copyOnSelect: true }, { copyOnSelect: false, version: 9 }),
+    { theme: 'dark', copyOnSelect: false },
+  );
 });
 
 // -- invariant 15: a second invocation must not pile up tabs ---------------
@@ -1156,7 +1205,7 @@ test('a RECENT row is never resumable, whatever the file says', () => {
 });
 
 test('a resume carries the rules Herdr’s own resume drops', () => {
-  const args = resumeArgs('u1', argsFor('rules', 'opus'));
+  const args = resumeArgs('u1', argsFor('rules', 'opus', false));
   assert.deepEqual(args.slice(0, 2), ['--resume', 'u1']);
   assert.ok(args.includes('--append-system-prompt'));
   assert.ok(args.includes('--model'));

@@ -7,7 +7,7 @@ import {
 import { Stream, type ShellRunner } from './CodeBlock.js';
 import { useSelectionCopy } from './copyOnSelect.js';
 import { DiffTab } from './Diff.js';
-import { EntryRow, Feed } from './Feed.js';
+import { EntryRow, Feed, Spotlit, usePromptJump } from './Feed.js';
 import type { FileViewer } from './fileRef.js';
 import { FileView } from './FileView.js';
 import { type Panels, panelsOf, rememberPanels } from './panels.js';
@@ -1194,6 +1194,15 @@ function ForkPanel(
 
   const open = view?.paneId != null;
 
+  // The fork's entries are only ever appended to, so an index is a stable key.
+  const entries = view?.entries ?? [];
+  const asked = entries.findLastIndex((e) => e.kind === 'user');
+  const [jump, setJump] = useState(0);
+  const { view: scroller, prompt, end, setBody, room, flash } = usePromptJump(
+    asked < 0 ? null : String(asked),
+    jump,
+  );
+
   return (
     <div className="flex h-full min-h-0 flex-col border-l border-neutral-800 text-xs">
       <div className="flex shrink-0 items-center gap-2 border-b border-neutral-800 px-2 py-1.5">
@@ -1239,39 +1248,55 @@ function ForkPanel(
 
       {failed && <div className="shrink-0 bg-amber-900/30 px-2 py-1 text-amber-300">{failed}</div>}
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-2 py-1">
-        {view?.entries.map((entry, i) => (
-          <EntryRow key={i} entry={entry} viewer={viewer} runner={runs?.runner} />
-        ))}
-        {pending
-          ? (
-            <div className="my-2 rounded border border-neutral-800 bg-neutral-900/50 px-2 py-1.5">
-              <div className="truncate font-mono text-neutral-400">! {pending.head}</div>
-              {live && live.length > 0 && <Stream text={live.join('\n')} />}
-              <div className="flex items-center gap-2 text-[11px]">
-                <Spinner
-                  label={!open
-                    ? 'forking the session — a tab, a launch and a copy of the context, about 10s'
-                    : live ? 'running…' : pending.queued ? 'queued behind the fork’s reply…' : 'sent…'}
-                />
-                <button
-                  onClick={() => { setPending(null); setLive(null); }}
-                  title="Stop watching. The run itself is not stopped, and its output arrives here when it lands."
-                  className="ml-auto text-neutral-600 hover:text-neutral-300"
-                >
-                  ×
-                </button>
-              </div>
-            </div>
-          )
-          : !view?.entries.length && (
-            <p className="py-2 text-neutral-600">
-              {busy && !open ? 'forking the session — a tab, a launch and a copy of the context, about 10s' : fork.empty}
-            </p>
+      <div ref={scroller} className="min-h-0 flex-1 overflow-y-auto px-2 py-1">
+        <div ref={setBody}>
+          {entries.map((entry, i) =>
+            i === asked
+              ? (
+                <Spotlit key={i} ref={prompt} flash={flash}>
+                  <EntryRow entry={entry} viewer={viewer} runner={runs?.runner} />
+                </Spotlit>
+              )
+              : <EntryRow key={i} entry={entry} viewer={viewer} runner={runs?.runner} />
           )}
+          {pending
+            ? (
+              <div className="my-2 rounded border border-neutral-800 bg-neutral-900/50 px-2 py-1.5">
+                <div className="truncate font-mono text-neutral-400">! {pending.head}</div>
+                {live && live.length > 0 && <Stream text={live.join('\n')} />}
+                <div className="flex items-center gap-2 text-[11px]">
+                  <Spinner
+                    label={!open
+                      ? 'forking the session — a tab, a launch and a copy of the context, about 10s'
+                      : live ? 'running…' : pending.queued ? 'queued behind the fork’s reply…' : 'sent…'}
+                  />
+                  <button
+                    onClick={() => { setPending(null); setLive(null); }}
+                    title="Stop watching. The run itself is not stopped, and its output arrives here when it lands."
+                    className="ml-auto text-neutral-600 hover:text-neutral-300"
+                  >
+                    ×
+                  </button>
+                </div>
+              </div>
+            )
+            : !entries.length && (
+              <p className="py-2 text-neutral-600">
+                {busy && !open ? 'forking the session — a tab, a launch and a copy of the context, about 10s' : fork.empty}
+              </p>
+            )}
+        </div>
+        <div ref={end} style={{ height: room }} />
       </div>
 
       <div className="flex shrink-0 gap-2 border-t border-neutral-800 p-2">
+        <button
+          onClick={() => setJump((n) => n + 1)}
+          title="Jump to your last prompt"
+          className="px-1 py-1 text-neutral-500 hover:text-neutral-200"
+        >
+          ⤒
+        </button>
         <input
           readOnly={busy}
           value={text}

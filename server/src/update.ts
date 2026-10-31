@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process';
 import { lstatSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
+import type { UpdateView } from '@harness/shared';
 import { shimCommand } from './account.js';
 
 /**
@@ -77,6 +78,51 @@ export function isNewer(latest: string | null, running: string | null): boolean 
     if (d !== 0) return d > 0;
   }
   return a[4] === undefined && b[4] !== undefined;
+}
+
+/**
+ * The last answer, kept so a tab that connects is told without asking npm, and
+ * shared by every asker while one is in flight — the daily timer and a `check`
+ * press landing together are one request.
+ */
+let last: UpdateView | null = null;
+let checking: Promise<UpdateView> | undefined;
+
+export const lastCheck = (): UpdateView | null => last;
+
+const CHECK_EVERY_MS = 24 * 60 * 60_000;
+/** A harness started at login can beat the network up; a day is too long to stay blind. */
+const RETRY_FAILED_MS = 60 * 60_000;
+
+/**
+ * Judged on the wall clock against `checkedAt`, not by a 24h timer: timers run
+ * on a monotonic clock that stops while a mac sleeps, so a laptop shut every
+ * night would go days between checks.
+ */
+export function checkDue(now = Date.now()): boolean {
+  if (last === null) return true;
+  return now - Date.parse(last.checkedAt) >= (last.error === undefined ? CHECK_EVERY_MS : RETRY_FAILED_MS);
+}
+
+/** Never throws: an unreachable registry is a line on the screen, not a broken one. */
+export function checkForUpdate(running: string | null, packageRoot: string): Promise<UpdateView> {
+  checking ??= Promise.all([
+    latestVersion().then((v) => ({ v }), (err: Error) => ({ v: null, error: err.message })),
+    updatable(packageRoot),
+  ]).then(([latest, canUpdate]) => {
+    // A failed check keeps what the last good one found: a registry blip must
+    // not take the ⚙ marker down for the hour until the retry.
+    const v = latest.v ?? last?.latest ?? null;
+    last = {
+      latest: v,
+      available: isNewer(v, running),
+      updatable: canUpdate,
+      checkedAt: new Date().toISOString(),
+      ...('error' in latest ? { error: latest.error } : {}),
+    };
+    return last;
+  }).finally(() => { checking = undefined; });
+  return checking;
 }
 
 /** Windows paths compare without case and either slash; `npm root -g` and `import.meta.url` disagree on both. */

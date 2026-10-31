@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  aliasRuns, type AgentRow, type Prefs, type ServerEvent, type WorkspaceRow,
+  aliasRuns, type AgentRow, type Prefs, type ServerEvent, type UpdateView, type WorkspaceRow,
 } from '@harness/shared';
 
 export interface HarnessState {
@@ -17,12 +17,14 @@ export interface HarnessState {
   quit: boolean;
   /** Null until the first `hello` — the switches then keep what the page started with. */
   prefs: Prefs | null;
+  /** The server's last registry check; null until one answers. */
+  update: UpdateView | null;
 }
 
 const EMPTY: HarnessState = {
   workspaces: [], agents: [], recent: [],
   herdrConnected: false, herdrError: null, herdrWarning: null, connected: false,
-  quit: false, prefs: null,
+  quit: false, prefs: null, update: null,
 };
 
 /**
@@ -132,9 +134,12 @@ function reduce(s: HarnessState, e: ServerEvent): HarnessState {
         // Absent from an older server's hello — which a dev page meets whenever
         // it defers to a running global install.
         prefs: e.prefs ?? null,
+        update: e.update ?? null,
       };
     case 'prefs':
       return { ...s, prefs: e.prefs };
+    case 'update':
+      return { ...s, update: e.update };
     case 'agents':
       return { ...s, agents: e.agents, workspaces: e.workspaces };
     case 'recent':

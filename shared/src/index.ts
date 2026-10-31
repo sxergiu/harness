@@ -764,16 +764,19 @@ export interface DirectoriesState {
 }
 
 /**
- * Asked of the npm registry on its own route, so an offline machine costs the
- * settings screen this line and nothing else.
+ * Asked of the npm registry at start and daily after that, and pushed rather
+ * than fetched, so an offline machine costs the settings line and the ⚙ marker
+ * and nothing else.
  */
 export interface UpdateView {
-  /** Null when the registry did not answer; `error` says why. */
+  /** Null until a check has answered; a failed one keeps the last answer and sets `error`. */
   latest: string | null;
   /** `latest` is newer than the version running. */
   available: boolean;
   /** This process is the global npm install, so `npm install -g` replaces it. */
   updatable: boolean;
+  /** When the registry was asked — up to a day ago between checks. */
+  checkedAt: string;
   error?: string;
 }
 
@@ -863,9 +866,13 @@ export type ServerEvent =
       /** The harness version serving this socket. A tab that reconnects to a different one reloads. */
       version: string | null;
       prefs: Prefs;
+      /** Null until the first registry check answers. */
+      update: UpdateView | null;
     }
   /** Every tab, so a toggle flipped in one is flipped in all of them. */
   | { type: 'prefs'; prefs: Prefs }
+  /** Every registry check, daily or asked for, whatever it found. */
+  | { type: 'update'; update: UpdateView }
   /**
    * Whole-list replace, and the only thing that says "something moved". The
    * board is small, it re-sorts on every change anyway, and open feed and diff

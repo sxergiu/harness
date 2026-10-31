@@ -70,23 +70,93 @@ export function Feed(
     }
   };
 
-  /**
-   * Your last prompt: where the work you are reading was asked for. It is the
-   * one anchor in a feed that is otherwise all machine output, so the jump puts
-   * it at the top of the viewport and everything the agent did since below it.
-   *
-   * The flash is what tells you the jump happened at all. Landing on a prompt
-   * already near the top scrolls by nothing, and without the flash that reads
-   * as a dead button. It grows the text a size as well as washing the
-   * background: a wash alone is easy to miss on a feed that is mostly grey on
-   * black. Type size rather than a transform, because scaling a block this wide
-   * pushes its right edge past the padding and the feed grows a scrollbar.
-   */
+  const latest = latestPrompt(turns);
+  const { view, prompt, end, setBody, room, flash } = usePromptJump(
+    latest && `${latest.turn}:${latest.entry}`,
+    jump,
+  );
+
+  // Three different nothings, which the panel used to report as one.
+  if (turns.length === 0) {
+    if (!loaded) return <div className="p-4 text-xs"><Spinner label="reading transcript…" /></div>;
+    if (failed) {
+      return <p className="p-4 text-xs text-red-400">⚠ could not read the feed — {failed}</p>;
+    }
+    return (
+      <p className="p-4 text-xs text-neutral-600">
+        No transcript for this agent. It may not have started work yet, or the transcript may have
+        been pruned.
+      </p>
+    );
+  }
+
+  return (
+    // The feed scrolls itself, the way the diff tab owns its own height: the
+    // spacer below is only meaningful to whatever the scrollport is.
+    <div ref={view} className="h-full overflow-y-auto p-3 text-xs">
+      {/* One box for all the content, so the observer has one thing to watch:
+          its height changing is exactly when the room needs remeasuring. */}
+      <div ref={setBody}>
+        {oldest > 0 && (
+          <button
+            onClick={() => void loadEarlier()}
+            className="mb-3 flex w-full items-center justify-center rounded border border-neutral-800 py-1 text-neutral-500 hover:text-neutral-300"
+          >
+            {loading ? <Spinner label="loading…" /> : `↑ load turn ${oldest} of ${total}`}
+          </button>
+        )}
+        {turns.map((t) => (
+          <div key={t.index}>
+            {t.entries.map((e, i) =>
+              latest && t.index === latest.turn && i === latest.entry
+                ? (
+                  // Wrapped rather than flagged through `EntryRow`: which prompt
+                  // is the latest is a fact about the feed, and `EntryRow` is
+                  // shared with the subagents tab, where there is no such thing.
+                  <Spotlit key={i} ref={prompt} flash={flash}>
+                    <EntryRow entry={e} viewer={viewer} runner={runner} />
+                  </Spotlit>
+                )
+                : <EntryRow
+                  key={i}
+                  entry={e}
+                  viewer={viewer}
+                  runner={runner}
+                />
+            )}
+          </div>
+        ))}
+      </div>
+      <div ref={end} style={{ height: room }} />
+    </div>
+  );
+}
+
+/**
+ * "Take me to my last prompt", for any scrollport holding a conversation — the
+ * feed, and the forks beside it, whose answers grow under a question exactly as
+ * the agent's work does under yours. `latestKey` names the newest prompt and
+ * changes when another lands; `jump` is the button's counter.
+ *
+ * Your last prompt is where the work you are reading was asked for. It is the
+ * one anchor in a feed that is otherwise all machine output, so the jump puts
+ * it at the top of the viewport and everything since below it.
+ *
+ * The caller wires `view` to the scrollport, `setBody` to one box holding all
+ * of the content, `prompt` to the newest prompt (through `Spotlit`, which
+ * carries the flash), and `end` to a spacer after the body `room` pixels tall.
+ */
+export function usePromptJump(latestKey: string | null, jump: number): {
+  view: React.RefObject<HTMLDivElement | null>;
+  prompt: React.RefObject<HTMLDivElement | null>;
+  end: React.RefObject<HTMLDivElement | null>;
+  setBody: (el: HTMLDivElement | null) => void;
+  room: number;
+  flash: boolean;
+} {
   const view = useRef<HTMLDivElement>(null);
   const prompt = useRef<HTMLDivElement>(null);
   const [flash, setFlash] = useState(false);
-  const latest = latestPrompt(turns);
-  const latestKey = latest && `${latest.turn}:${latest.entry}`;
 
   /**
    * Room to scroll past the end, so the prompt can actually reach the top.
@@ -173,69 +243,38 @@ export function Feed(
     if (moved && !first) spotlight();
   }, [latestKey, spotlight]);
 
-  // Three different nothings, which the panel used to report as one.
-  if (turns.length === 0) {
-    if (!loaded) return <div className="p-4 text-xs"><Spinner label="reading transcript…" /></div>;
-    if (failed) {
-      return <p className="p-4 text-xs text-red-400">⚠ could not read the feed — {failed}</p>;
-    }
-    return (
-      <p className="p-4 text-xs text-neutral-600">
-        No transcript for this agent. It may not have started work yet, or the transcript may have
-        been pruned.
-      </p>
-    );
-  }
+  return { view, prompt, end, setBody, room, flash };
+}
 
+/**
+ * The newest prompt's wrapper. The flash is what tells you the jump happened at
+ * all: landing on a prompt already near the top scrolls by nothing, and without
+ * it that reads as a dead button. It grows the text a size as well as washing
+ * the background, since a wash alone is easy to miss on a feed that is mostly
+ * grey on black. Type size rather than a transform, because scaling a block
+ * this wide pushes its right edge past the padding and the feed grows a
+ * scrollbar.
+ */
+export function Spotlit(
+  { ref, flash, children }: {
+    ref: React.Ref<HTMLDivElement>;
+    flash: boolean;
+    children: React.ReactNode;
+  },
+): React.ReactElement {
   return (
-    // The feed scrolls itself, the way the diff tab owns its own height: the
-    // spacer below is only meaningful to whatever the scrollport is.
-    <div ref={view} className="h-full overflow-y-auto p-3 text-xs">
-      {/* One box for all the content, so the observer above has one thing to
-          watch: its height changing is exactly when the room needs remeasuring. */}
-      <div ref={setBody}>
-        {oldest > 0 && (
-          <button
-            onClick={() => void loadEarlier()}
-            className="mb-3 flex w-full items-center justify-center rounded border border-neutral-800 py-1 text-neutral-500 hover:text-neutral-300"
-          >
-            {loading ? <Spinner label="loading…" /> : `↑ load turn ${oldest} of ${total}`}
-          </button>
-        )}
-        {turns.map((t) => (
-          <div key={t.index}>
-            {t.entries.map((e, i) =>
-              latest && t.index === latest.turn && i === latest.entry
-                ? (
-                  // Wrapped rather than flagged through `EntryRow`: which prompt
-                  // is the latest is a fact about the feed, and `EntryRow` is
-                  // shared with the subagents tab, where there is no such thing.
-                  <div
-                    key={i}
-                    ref={prompt}
-                    // `scroll-mt-4` is the landing gap: flush against the
-                    // scrollport, the flash's wash and ring butt up against the
-                    // tab bar and read as overlapping it.
-                    className={`scroll-mt-4 rounded transition-all duration-300 ${
-                      flash
-                        ? 'bg-neutral-700/60 text-sm ring-1 ring-neutral-400/50'
-                        : 'bg-transparent text-xs'
-                    }`}
-                  >
-                    <EntryRow entry={e} viewer={viewer} runner={runner} />
-                  </div>
-                )
-                : <EntryRow
-                  key={i}
-                  entry={e}
-                  viewer={viewer}
-                  runner={runner}
-                />
-            )}
-          </div>
-        ))}
-      </div>
-      <div ref={end} style={{ height: room }} />
+    <div
+      ref={ref}
+      // `scroll-mt-4` is the landing gap: flush against the scrollport, the
+      // flash's wash and ring butt up against the tab bar and read as
+      // overlapping it.
+      className={`scroll-mt-4 rounded transition-all duration-300 ${
+        flash
+          ? 'bg-neutral-700/60 text-sm ring-1 ring-neutral-400/50'
+          : 'bg-transparent text-xs'
+      }`}
+    >
+      {children}
     </div>
   );
 }

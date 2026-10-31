@@ -61,6 +61,13 @@ rules apply to everything you do here.
    agent to take one in parallel — you are the orchestrator for this checkout.
    Delegate investigation and planning; do not delegate the edits.
 
+9. Give every command the human should run its own fenced code block tagged
+   bash, written exactly as it is typed: no $ or ! prompt in front, no output
+   under it. The cockpit puts a run button on a bash block and nowhere else, so
+   an untagged block, an inline code span or a suggestion to type ! followed by
+   a command leaves the human copying it by hand. This replaces any other advice
+   you have about how to hand the human a command.
+
 Your changelist in the cockpit is built from your own Write and Edit tool calls.
 Two things are therefore invisible to the human reviewing your work: a file you
 change with a shell command, and a file changed by a SUBAGENT, whose calls are

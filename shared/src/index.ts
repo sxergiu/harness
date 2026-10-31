@@ -769,7 +769,7 @@ export interface DirectoriesState {
  * and nothing else.
  */
 export interface UpdateView {
-  /** Null when the registry did not answer; `error` says why. */
+  /** Null until a check has answered; a failed one keeps the last answer and sets `error`. */
   latest: string | null;
   /** `latest` is newer than the version running. */
   available: boolean;

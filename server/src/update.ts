@@ -101,7 +101,7 @@ const RETRY_FAILED_MS = 60 * 60_000;
  */
 export function checkDue(now = Date.now()): boolean {
   if (last === null) return true;
-  return now - Date.parse(last.checkedAt) >= (last.latest === null ? RETRY_FAILED_MS : CHECK_EVERY_MS);
+  return now - Date.parse(last.checkedAt) >= (last.error === undefined ? CHECK_EVERY_MS : RETRY_FAILED_MS);
 }
 
 /** Never throws: an unreachable registry is a line on the screen, not a broken one. */
@@ -110,9 +110,12 @@ export function checkForUpdate(running: string | null, packageRoot: string): Pro
     latestVersion().then((v) => ({ v }), (err: Error) => ({ v: null, error: err.message })),
     updatable(packageRoot),
   ]).then(([latest, canUpdate]) => {
+    // A failed check keeps what the last good one found: a registry blip must
+    // not take the ⚙ marker down for the hour until the retry.
+    const v = latest.v ?? last?.latest ?? null;
     last = {
-      latest: latest.v,
-      available: isNewer(latest.v, running),
+      latest: v,
+      available: isNewer(v, running),
       updatable: canUpdate,
       checkedAt: new Date().toISOString(),
       ...('error' in latest ? { error: latest.error } : {}),

@@ -8,6 +8,8 @@
       // Before first paint, or a light-mode load flashes the dark page while the
       // bundle is still arriving. This is the ONLY copy of the rule — theme.ts
       // reads the answer back off the class rather than resolving it again.
+      // Storage here is a cache of the server's pref, which a page on another
+      // origin may not hold yet: that load follows the OS until the socket says.
       // Wrapped because a classic script's top-level `var` would land on
       // `window`. Dark needs no class.
       (function () {

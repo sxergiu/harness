@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import { existsSync, openSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { basename, join } from 'node:path';
+import { basename, isAbsolute, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import fastifyStatic from '@fastify/static';
@@ -19,9 +19,9 @@ import { ASIDE_FORK, Aside, RUN_FORK } from './aside.js';
 import { Board } from './board.js';
 import { autoAcceptEnabled, setAutoAccept } from './chrome.js';
 import {
-  claudeFiles, configuredAlias, configuredEffort, grantPermissions, hold, installClaudeFiles,
-  mayTrust, permissionsState, pinnedAlias, setPinnedAlias, settleSettings, trustFolder,
-  type PermissionsOutcome,
+  acceptBypassWarning, claudeFiles, configuredAlias, configuredEffort, directoriesState,
+  grantPermissions, hold, installClaudeFiles, mayTrust, permissionsState, pinnedAlias,
+  setDirectory, setPinnedAlias, settleSettings, trustFolder, type PermissionsOutcome,
 } from './claudeFiles.js';
 import { buildAgentDiff, readAgentFile, touchedPaths } from './diff.js';
 import { Herdr, shellTail } from './herdr.js';
@@ -33,7 +33,8 @@ import {
 } from './instance.js';
 import { admits } from './origin.js';
 import { cancelPick, pickDir, picking } from './picker.js';
-import { Projects } from './projects.js';
+import { PrefsStore } from './prefs.js';
+import { Projects, type Checkout } from './projects.js';
 import { Shades } from './shades.js';
 import {
   modelDefault, resumeArgs, rulesAreDefault, rulesText, setModelDefault, setRules, startArgs,
@@ -256,6 +257,7 @@ const history = new History();
 const projects = new Projects();
 /** Row tints, keyed on a pane id and kept across restarts — see `shades.ts`. */
 const shades = new Shades();
+const prefs = new PrefsStore();
 let herdrError: string | undefined;
 
 // `board` is captured, not called, at construction time — both callbacks fire
@@ -836,6 +838,24 @@ app.post<{ Params: { paneId: string }; Body: { name?: string } }>(
 );
 
 /**
+ * What a start in `dir` is granted. Auto-accept also re-asserts the bypass
+ * warning's acceptance — a no-op once the key is set, and without it an agent
+ * whose settings lost the key since the box was ticked sits at that warning.
+ * Best-effort: the warning is still answerable in the pane.
+ */
+function startGrant(dir: string): Checkout {
+  const grant = projects.grantOf(dir);
+  if (grant.autoAccept) {
+    try {
+      acceptBypassWarning();
+    } catch (err) {
+      logError('could not accept the bypass-mode warning', err);
+    }
+  }
+  return grant;
+}
+
+/**
  * Starting an agent is one click: no name, no directory, no placement. The
  * directory belongs to the space, and `agent.start` takes none of its own — it
  * comes from the pane, so the tab is created in the space's dir first.
@@ -856,7 +876,7 @@ app.post<{ Params: { id: string } }>('/api/workspaces/:id/agents', async (req, r
     const paneId = await herdr.launchAgent(
       name,
       { workspaceId: space.id, cwd: space.dir, label: name },
-      startArgs(projects.gitDelegated(space.dir), alias),
+      startArgs(startGrant(space.dir), alias),
     );
     // After the launch, so a start that threw records nothing: the pane it
     // would name was closed, and the id is Herdr's to hand to somebody else.
@@ -890,7 +910,7 @@ app.post<{ Params: { paneId: string } }>('/api/agents/:paneId/resume', async (re
     await herdr.resumeIn(
       name,
       row.paneId,
-      resumeArgs(row.sessionUuid, startArgs(projects.gitDelegated(row.cwd), alias)),
+      resumeArgs(row.sessionUuid, startArgs(startGrant(row.cwd), alias)),
     );
     if (alias) board.startedOn(row.paneId, alias);
     board.schedule();
@@ -975,26 +995,46 @@ function spaceDirOf(raw: string | undefined): { dir: string } | { error: string 
 }
 
 /**
- * The git grant rides along rather than taking a route of its own: it is a
- * second fact about the same resolved path, and this is the only place that
- * already turns what the human typed into one.
+ * The grants a request names, and only those: one left out is left alone.
+ * Ticking auto-accept is also the human accepting Claude Code's bypass-mode
+ * warning, so a key that cannot be written refuses the tick rather than grant
+ * one whose every agent would stop at that warning.
  */
-app.post<{ Params: { id: string }; Body: { dir?: string; gitDelegated?: boolean } }>(
+function setGrant(dir: string, body: Partial<Record<keyof Checkout, unknown>> | undefined): boolean {
+  const patch: Partial<Checkout> = {};
+  if (typeof body?.gitDelegated === 'boolean') patch.gitDelegated = body.gitDelegated;
+  if (typeof body?.autoAccept === 'boolean') patch.autoAccept = body.autoAccept;
+  if (Object.keys(patch).length === 0) return false;
+  if (patch.autoAccept) acceptBypassWarning();
+  projects.setGrant(dir, patch);
+  // Not just this space: the grant is on the checkout, so every space pointed
+  // at it has just changed. A resync is the only thing that reaches all of them.
+  board.schedule();
+  return true;
+}
+
+/**
+ * The grants ride along rather than taking a route of their own: they are more
+ * facts about the same resolved path, and this is the only place that already
+ * turns what the human typed into one.
+ */
+app.post<{
+  Params: { id: string };
+  Body: { dir?: string; gitDelegated?: boolean; autoAccept?: boolean };
+}>(
   '/api/workspaces/:id/dir',
   async (req, reply) => {
     if (!board.workspace(req.params.id)) return reply.code(404).send({ error: 'no such space' });
     const d = spaceDirOf(req.body?.dir);
     if ('error' in d) return reply.code(400).send(d);
     const resolved = d.dir;
-    if (typeof req.body?.gitDelegated === 'boolean') {
-      projects.setGitDelegated(resolved, req.body.gitDelegated);
-      // Not just this space: the grant is on the checkout, so every space
-      // pointed at it has just changed. A resync is the only thing that reaches
-      // all of them.
-      board.schedule();
+    try {
+      setGrant(resolved, req.body);
+    } catch (err) {
+      return reply.code(500).send({ error: `could not save the grant, so nothing changed: ${(err as Error).message}` });
     }
     board.setSpaceDir(req.params.id, resolved);
-    return { ok: true, dir: resolved, gitDelegated: projects.gitDelegated(resolved) };
+    return { ok: true, dir: resolved, ...projects.grantOf(resolved) };
   },
 );
 
@@ -1063,6 +1103,16 @@ app.post<{ Params: { id: string } }>('/api/tabs/:id/close', async (req, reply) =
   }),
 );
 
+/**
+ * The page's switches — see `prefs.ts`. Broadcast rather than only answered, so
+ * a toggle flipped in one tab is flipped in every other one too.
+ */
+app.post('/api/prefs', async (req) => {
+  const next = prefs.set(req.body);
+  broadcast({ type: 'prefs', prefs: next });
+  return next;
+});
+
 // ---------------------------------------------------------------------------
 // Settings
 // ---------------------------------------------------------------------------
@@ -1092,6 +1142,7 @@ const settingsView = (): SettingsView => ({
   claudeFiles: claudeFiles(),
   herdr: herdrRuleState(),
   permissions: permissionsState(),
+  directories: directoriesState(),
   chromeAutoAccept: autoAcceptEnabled(),
 });
 
@@ -1172,15 +1223,48 @@ app.post<{ Body: { alias?: string } }>('/api/settings/claude-model', async (req,
  * this screen is the only place a checkout with no space pointed at it can be
  * revoked.
  */
-app.post<{ Body: { path?: string; gitDelegated?: boolean } }>(
+app.post<{ Body: { path?: string; gitDelegated?: boolean; autoAccept?: boolean } }>(
   '/api/settings/checkouts',
   async (req, reply) => {
-    const { path, gitDelegated } = req.body ?? {};
-    if (typeof path !== 'string' || typeof gitDelegated !== 'boolean') {
-      return reply.code(400).send({ error: 'path and gitDelegated are required' });
+    const path = req.body?.path;
+    if (typeof path !== 'string') return reply.code(400).send({ error: 'path is required' });
+    try {
+      if (!setGrant(path, req.body)) {
+        return reply.code(400).send({ error: 'gitDelegated or autoAccept is required' });
+      }
+    } catch (err) {
+      return reply.code(500).send({ error: `could not save the grant, so nothing changed: ${(err as Error).message}` });
     }
-    projects.setGitDelegated(path, gitDelegated);
-    board.schedule();
+    return settingsView();
+  },
+);
+
+/** Harness-owned entries only on the way out — see `setDirectory`. */
+app.post<{ Body: { path?: string; allow?: boolean } }>(
+  '/api/settings/directories',
+  async (req, reply) => {
+    const { path, allow } = req.body ?? {};
+    if (typeof path !== 'string' || typeof allow !== 'boolean') {
+      return reply.code(400).send({ error: 'path and allow are required' });
+    }
+    let dir = path;
+    if (allow) {
+      const d = spaceDirOf(path);
+      if ('error' in d) return reply.code(400).send(d);
+      // Resolved against THIS process's cwd it would name a folder no agent means.
+      if (!isAbsolute(d.dir)) return reply.code(400).send({ error: 'an absolute path is required' });
+      // User-level, so it covers every session on the machine and the whole
+      // tree below — `trustFolder`'s inheritance hazard, behind one click.
+      if (!mayTrust(d.dir)) {
+        return reply.code(400).send({ error: 'not the home folder or a folder above it' });
+      }
+      dir = d.dir;
+    }
+    try {
+      setDirectory(dir, allow);
+    } catch (err) {
+      return reply.code(500).send({ error: `could not write settings: ${(err as Error).message}` });
+    }
     return settingsView();
   },
 );
@@ -1387,6 +1471,7 @@ wss.on('connection', (ws: WebSocket) => {
     recent: board.recent(),
     herdrConnected: herdr.connected,
     version: runningVersion,
+    prefs: prefs.get(),
   };
   ws.send(JSON.stringify(hello));
   // `hello` carries only whether Herdr is up; anything to SAY about it — down,

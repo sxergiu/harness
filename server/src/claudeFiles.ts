@@ -2,7 +2,7 @@ import { mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } 
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { ClaudeFileState, PermissionsState } from '@harness/shared';
+import type { ClaudeFileState, DirectoriesState, PermissionsState } from '@harness/shared';
 
 /**
  * The files `rules.ts` depends on but cannot carry. Rule 4 tells every agent to
@@ -173,14 +173,19 @@ export function trustKey(dir: string, platform: string = process.platform): stri
 export function mayTrust(
   dir: string, home: string = homedir(), platform: string = process.platform,
 ): boolean {
-  const fold = (p: string): string => {
-    const k = trustKey(p, platform);
-    return platform === 'win32' ? k.toLowerCase() : k;
-  };
-  const d = fold(dir);
-  const h = fold(home);
+  const d = fold(dir, platform);
+  const h = fold(home, platform);
   return h !== d && !h.startsWith(d.endsWith('/') ? d : `${d}/`);
 }
+
+/** One spelling per folder, for comparing paths rather than writing them. */
+function fold(p: string, platform: string): string {
+  const k = trustKey(p, platform);
+  return platform === 'win32' ? k.toLowerCase() : k;
+}
+
+const samePath = (a: string, b: string, platform: string = process.platform): boolean =>
+  fold(a, platform) === fold(b, platform);
 
 // ---------------------------------------------------------------------------
 // ~/.claude/settings.json
@@ -554,6 +559,128 @@ export function grantPermissions(): { outcome: PermissionsOutcome; state: Permis
   if (grant.missing.length === 0) return { outcome: 'granted', state };
   replaceSettings(grant.next);
   return { outcome: 'wrote', state };
+}
+
+/**
+ * The settings as an object to merge into, or a throw: a file that is there and
+ * not a JSON object holds something of the human's that writing would discard.
+ */
+function settingsObject(): Record<string, unknown> {
+  const text = read(SETTINGS);
+  const settings = text === null ? {} : JSON.parse(text) as unknown;
+  if (typeof settings !== 'object' || settings === null || Array.isArray(settings)) {
+    throw new Error(`${SETTINGS} is not JSON this can merge into — left alone`);
+  }
+  return settings as Record<string, unknown>;
+}
+
+/**
+ * Claude Code shows a one-time "running in Bypass Permissions mode — Yes, I
+ * accept / No, exit" warning unless this key is set, read out of the 2.1.314
+ * bundle. An agent started with auto-accept would sit at it, so ticking that
+ * box on a checkout is taken as the acceptance. Only ever set, never cleared:
+ * the human may have accepted it themselves for agents of their own.
+ */
+export function acceptBypassWarning(): void {
+  const settings = settingsObject();
+  if (settings.skipDangerousModePermissionPrompt === true) return;
+  replaceSettings({ ...settings, skipDangerousModePermissionPrompt: true });
+}
+
+/**
+ * The folders the cockpit has put in `permissions.additionalDirectories`, kept
+ * so it removes only those. The settings file is the authority for what agents
+ * may touch; this says only whose each entry is, so it takes `recent.json`'s
+ * tolerant policy — a misread costs a remove button, never access.
+ */
+const DIRECTORIES = join(homedir(), '.harness', 'directories.json');
+
+function ourDirectories(): string[] {
+  try {
+    const doc = JSON.parse(readFileSync(DIRECTORIES, 'utf8')) as { version?: unknown; dirs?: unknown };
+    return doc.version === 1 && Array.isArray(doc.dirs)
+      ? doc.dirs.filter((d): d is string => typeof d === 'string')
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveOurDirectories(dirs: string[]): void {
+  mkdirSync(dirname(DIRECTORIES), { recursive: true });
+  writeFileSync(DIRECTORIES, JSON.stringify({ version: 1, dirs }, null, 2));
+}
+
+/** The list as it stands, or null for any shape this would have to guess about. */
+export function directoriesIn(settings: unknown): string[] | null {
+  if (typeof settings !== 'object' || settings === null || Array.isArray(settings)) return null;
+  const p = (settings as Record<string, unknown>).permissions ?? {};
+  if (typeof p !== 'object' || p === null || Array.isArray(p)) return null;
+  const list = (p as Record<string, unknown>).additionalDirectories ?? [];
+  return Array.isArray(list) && list.every((d) => typeof d === 'string') ? list : null;
+}
+
+/**
+ * Adds `dir` to the list, or removes every spelling of it, leaving every other
+ * key and entry exactly where it was. Pure for `grantOf`'s reason. Null where
+ * `directoriesIn` is.
+ */
+export function withDirectory(
+  settings: unknown, dir: string, allow: boolean, platform: string = process.platform,
+): Record<string, unknown> | null {
+  const list = directoriesIn(settings);
+  if (list === null) return null;
+  const root = settings as Record<string, unknown>;
+  const perms = (root.permissions ?? {}) as Record<string, unknown>;
+  const same = (d: string): boolean => samePath(d, dir, platform);
+  const next = allow
+    ? (list.some(same) ? list : [...list, dir])
+    : list.filter((d) => !same(d));
+  return { ...root, permissions: { ...perms, additionalDirectories: next } };
+}
+
+export function directoriesState(): DirectoriesState {
+  let list: string[] | null;
+  try {
+    list = directoriesIn(settingsObject());
+  } catch {
+    list = null;
+  }
+  if (list === null) return { status: 'unreadable', entries: [] };
+  const ours = ourDirectories();
+  const has = (all: string[], d: string): boolean => all.some((o) => samePath(o, d));
+  return {
+    status: 'ok',
+    entries: [
+      ...list.map((path) => ({ path, ours: has(ours, path), present: true })),
+      ...ours.filter((d) => !has(list, d)).map((path) => ({ path, ours: true, present: false })),
+    ],
+  };
+}
+
+/**
+ * Throws on a write that did not happen, `grantPermissions`' reason. A folder
+ * already in the human's own list is left theirs rather than claimed: claiming
+ * it would make the cockpit's remove button take away an entry it never made.
+ */
+export function setDirectory(dir: string, allow: boolean): void {
+  const settings = settingsObject();
+  const list = directoriesIn(settings);
+  const next = withDirectory(settings, dir, allow);
+  if (list === null || next === null) {
+    throw new Error('permissions.additionalDirectories is not a list of paths — left alone');
+  }
+  const ours = ourDirectories();
+  const same = (d: string): boolean => samePath(d, dir);
+  if (allow) {
+    if (list.some(same)) return;
+    replaceSettings(next);
+    if (!ours.some(same)) saveOurDirectories([...ours, dir]);
+  } else {
+    if (!ours.some(same)) throw new Error('that folder is in your own settings — the cockpit removes only what it added');
+    if (list.some(same)) replaceSettings(next);
+    saveOurDirectories(ours.filter((d) => !same(d)));
+  }
 }
 
 /** Null when the assets are not beside the bundle — a `dist/` built before them. */

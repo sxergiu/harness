@@ -363,7 +363,9 @@ export class Board {
     const w = this.workspace(id);
     if (w) {
       w.dir = dir;
-      w.gitDelegated = this.projects.gitDelegated(dir);
+      const grant = this.projects.grantOf(dir);
+      w.gitDelegated = grant.gitDelegated;
+      w.autoAccept = grant.autoAccept;
     }
     this.onChange();
   }
@@ -515,7 +517,7 @@ export class Board {
           agentCount: 0,
           focused: w.focused,
           dir,
-          gitDelegated: dir !== null && this.projects.gitDelegated(dir),
+          ...(dir === null ? { gitDelegated: false, autoAccept: false } : this.projects.grantOf(dir)),
         };
       });
     } catch {

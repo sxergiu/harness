@@ -92,6 +92,12 @@ export interface WorkspaceRow {
    * row — a workspace id is Herdr's and is recycled, a path is not.
    */
   gitDelegated: boolean;
+  /**
+   * Whether agents started here run with `--permission-mode bypassPermissions`,
+   * asking nothing at all. The same kind of fact as `gitDelegated`, from the
+   * same store.
+   */
+  autoAccept: boolean;
 }
 
 /**
@@ -743,6 +749,21 @@ export interface PermissionsState {
 }
 
 /**
+ * `permissions.additionalDirectories` in `~/.claude/settings.json`: folders
+ * outside its cwd that every agent may use without asking.
+ */
+export interface DirectoriesState {
+  /** `unreadable`: the same refusal as `PermissionsState` — never written over. */
+  status: 'ok' | 'unreadable';
+  /**
+   * `ours` is an entry the cockpit added, and the only kind it removes; the
+   * rest are the human's own. `present` is false for one of ours that has
+   * since been taken out of the file by something else.
+   */
+  entries: Array<{ path: string; ours: boolean; present: boolean }>;
+}
+
+/**
  * Asked of the npm registry on its own route, so an offline machine costs the
  * settings screen this line and nothing else.
  */
@@ -801,11 +822,12 @@ export interface SettingsView {
      */
     effort: string | null;
   };
-  /** Only the checkouts git has been delegated in — a revoke removes the entry. */
-  checkouts: Array<{ path: string; gitDelegated: boolean }>;
+  /** Only the checkouts holding a grant — revoking the last one removes the entry. */
+  checkouts: Array<{ path: string; gitDelegated: boolean; autoAccept: boolean }>;
   claudeFiles: ClaudeFileState[];
   herdr: HerdrRuleState;
   permissions: PermissionsState;
+  directories: DirectoriesState;
   /**
    * Whether the cockpit answers Claude in Chrome's site-permission dialog with
    * "allow" itself. Off unless the human turns it on, and useless without the
@@ -813,6 +835,18 @@ export interface SettingsView {
    * blocked agent for this to answer.
    */
   chromeAutoAccept: boolean;
+}
+
+/**
+ * The human's choices about the PAGE, kept by the server because the browser's
+ * own storage is per-origin: the dev page on 4374, the built one on 4373, and
+ * `localhost` against `127.0.0.1` each held a separate copy, so a choice made in
+ * one was simply absent in the next. Null is never chosen — the theme then
+ * follows the OS, and copying stays off.
+ */
+export interface Prefs {
+  theme: 'light' | 'dark' | null;
+  copyOnSelect: boolean | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -828,7 +862,10 @@ export type ServerEvent =
       herdrConnected: boolean;
       /** The harness version serving this socket. A tab that reconnects to a different one reloads. */
       version: string | null;
+      prefs: Prefs;
     }
+  /** Every tab, so a toggle flipped in one is flipped in all of them. */
+  | { type: 'prefs'; prefs: Prefs }
   /**
    * Whole-list replace, and the only thing that says "something moved". The
    * board is small, it re-sorts on every change anyway, and open feed and diff

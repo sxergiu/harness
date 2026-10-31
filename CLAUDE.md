@@ -388,6 +388,17 @@ means the same thing forever, so this is exactly the fact that is safe to persis
 amendment is appended after the rules it amends and says it extends nowhere else; nothing
 stops an agent pushing from a checkout that was never delegated.
 
+**Auto-accept is the second per-checkout grant, and it removes every prompt.** Same store,
+same key: an agent started or resumed in a checkout holding it gets `--permission-mode
+bypassPermissions`. Asides, run forks and our own instruments never pass it — whether a
+fork of a bypass session INHERITS the mode from its parent is NOT measured. Ticking it
+writes `skipDangerousModePermissionPrompt` into the user's `~/.claude/settings.json`, which
+is machine-wide and is never taken back, since it silences the warning for agents started
+by hand too. A REVOKE that cannot be saved is refused (500) rather than held in memory,
+because the next restart would re-read the grant from disk and hand bypass back silently.
+`permissions.additionalDirectories` (⚙ FOLDERS) is user-level for the same reason and so
+refuses the home folder and anything above it (`mayTrust`).
+
 **`~/.harness/rules.md` replaces `RULES` wholesale**, read on every `startArgs` and never
 cached — the settings screen promises "applies to agents started from now on", and a cached
 read would make that a lie in the other direction. Blank or absent means the shipped text,
@@ -428,6 +439,8 @@ server/src/
                       `~/.harness/model` is the `--model`; both read per start
   log.ts              what a bug report attaches. Always on, file only, capped
   projects.ts         what the human has decided about a CHECKOUT, keyed on its path
+  prefs.ts            the page's own switches (theme, copy-on-select), held here
+                      because browser storage is per ORIGIN
   claudeFiles.ts      every file of Claude Code's OWN that we touch: the planner
                       subagent and the two commands, `harness init`, the trust
                       grant for the one folder that is ours, and settings.json —
@@ -1228,6 +1241,9 @@ committing where it was never allowed to. `recent.json` MIGRATES its pre-version
 and drops only rows missing `paneId` or `name`, because it is a cache and the worst a
 misread does is show a stale row. `shades.json` takes `recent.json`'s side and drops only
 entries it cannot read: nothing is authorized by it, and a misread costs one wrong tint.
+`prefs.json` is tolerant per field for that reason. `directories.json` records only which
+`additionalDirectories` entries are OURS, so an unreadable one reads as empty: every entry
+then looks like the human's, which costs its remove button and never grants a folder.
 Do not make them consistent with one another; the asymmetry is the reasoning.
 
 **`~/.harness/harness.log` is always on and never on stdout.** `logger: false` still stands

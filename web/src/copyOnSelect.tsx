@@ -1,32 +1,52 @@
 import { useEffect, useState, type RefObject } from 'react';
+import type { Prefs } from '@harness/shared';
+import { useApi } from './useHarness.js';
 
-const COPY_KEY = 'harness.copyOnSelect';
+/** Where this browser kept the switch before the server did. */
+const LEGACY_KEY = 'harness.copyOnSelect';
 
-/**
- * Off unless the human turned it on: copying on select overwrites whatever was
- * on the clipboard, which nobody should discover by losing it. Unreadable
- * storage reads as off for the same reason.
- */
-function stored(): boolean {
+function legacy(): boolean | null {
   try {
-    return localStorage.getItem(COPY_KEY) === 'on';
+    const v = localStorage.getItem(LEGACY_KEY);
+    return v === 'on' ? true : v === 'off' ? false : null;
   } catch {
-    return false;
+    return null;
   }
 }
 
-/** The per-browser switch, kept beside the theme's and on the same terms. */
-export function useCopyOnSelect(): { on: boolean; toggle: () => void } {
-  const [on, setOn] = useState(stored);
+/**
+ * The switch, kept by the server beside the theme — see `Prefs`. Off unless the
+ * human turned it on: copying on select overwrites whatever was on the
+ * clipboard, which nobody should discover by losing it.
+ *
+ * A choice this browser made before the server kept one is carried up the first
+ * time the server says nobody has chosen, so the upgrade forgets nothing.
+ */
+export function useCopyOnSelect(prefs: Prefs | null): { on: boolean; toggle: () => void } {
+  const { post } = useApi();
+  const [on, setOn] = useState(false);
+
+  useEffect(() => {
+    if (prefs === null) return;
+    if (prefs.copyOnSelect !== null) {
+      setOn(prefs.copyOnSelect);
+      return;
+    }
+    const was = legacy();
+    if (was === null) return;
+    void post('/api/prefs', { copyOnSelect: was }).then(() => {
+      try {
+        localStorage.removeItem(LEGACY_KEY);
+      } catch { /* carried up already; a stale copy here is never read again */ }
+    }, () => {});
+  }, [prefs, post]);
 
   const toggle = (): void => {
     const next = !on;
-    try {
-      localStorage.setItem(COPY_KEY, next ? 'on' : 'off');
-    } catch {
-      // Unwritable storage costs the choice its persistence, never the click.
-    }
+    // Set here as well as by the broadcast, so a server that did not answer
+    // costs the choice its persistence, never the click.
     setOn(next);
+    void post('/api/prefs', { copyOnSelect: next }).catch(() => {});
   };
 
   return { on, toggle };

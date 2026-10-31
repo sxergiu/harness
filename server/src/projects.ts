@@ -62,12 +62,21 @@ export class Projects {
   /** Changes only the grants `patch` names. */
   setGrant(dir: string, patch: Partial<Checkout>): void {
     const path = resolve(dir);
+    const before = this.checkouts.get(path);
     const next = { ...this.grantOf(path), ...patch };
     if (next.gitDelegated || next.autoAccept) this.checkouts.set(path, next);
     // A revoked grant leaves nothing behind: the entry IS the grant, and an
     // empty record would only accumulate paths the human has finished with.
     else this.checkouts.delete(path);
-    this.save();
+    try {
+      this.save();
+    } catch (err) {
+      // Revoking auto-accept is a refusal, so an unsaved revoke would hand
+      // bypass back at the next restart with nothing on screen saying so.
+      if (before) this.checkouts.set(path, before);
+      else this.checkouts.delete(path);
+      throw err;
+    }
   }
 
   /** Every checkout the human has decided something about. For the settings screen. */
@@ -78,15 +87,9 @@ export class Projects {
   }
 
   private save(): void {
-    try {
-      mkdirSync(dirname(PATH), { recursive: true });
-      const checkouts = Object.fromEntries(this.checkouts);
-      writeFileSync(PATH, JSON.stringify({ version: VERSION, checkouts }, null, 2));
-    } catch {
-      // An unwritable home costs the grant its persistence, never the ability
-      // to run — the same posture as `history.ts`. This one is also the safe
-      // direction to fail in: what is lost is a permission, not a refusal.
-    }
+    mkdirSync(dirname(PATH), { recursive: true });
+    const checkouts = Object.fromEntries(this.checkouts);
+    writeFileSync(PATH, JSON.stringify({ version: VERSION, checkouts }, null, 2));
   }
 }
 

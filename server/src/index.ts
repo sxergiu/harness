@@ -1031,7 +1031,7 @@ app.post<{
     try {
       setGrant(resolved, req.body);
     } catch (err) {
-      return reply.code(500).send({ error: `could not grant auto-accept, so nothing was saved: ${(err as Error).message}` });
+      return reply.code(500).send({ error: `could not save the grant, so nothing changed: ${(err as Error).message}` });
     }
     board.setSpaceDir(req.params.id, resolved);
     return { ok: true, dir: resolved, ...projects.grantOf(resolved) };
@@ -1233,7 +1233,7 @@ app.post<{ Body: { path?: string; gitDelegated?: boolean; autoAccept?: boolean }
         return reply.code(400).send({ error: 'gitDelegated or autoAccept is required' });
       }
     } catch (err) {
-      return reply.code(500).send({ error: `could not grant auto-accept, so nothing was saved: ${(err as Error).message}` });
+      return reply.code(500).send({ error: `could not save the grant, so nothing changed: ${(err as Error).message}` });
     }
     return settingsView();
   },
@@ -1253,6 +1253,11 @@ app.post<{ Body: { path?: string; allow?: boolean } }>(
       if ('error' in d) return reply.code(400).send(d);
       // Resolved against THIS process's cwd it would name a folder no agent means.
       if (!isAbsolute(d.dir)) return reply.code(400).send({ error: 'an absolute path is required' });
+      // User-level, so it covers every session on the machine and the whole
+      // tree below — `trustFolder`'s inheritance hazard, behind one click.
+      if (!mayTrust(d.dir)) {
+        return reply.code(400).send({ error: 'not the home folder or a folder above it' });
+      }
       dir = d.dir;
     }
     try {

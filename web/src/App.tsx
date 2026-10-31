@@ -223,7 +223,10 @@ export function App(): React.ReactElement {
               />
               <IconButton
                 label="⚙"
-                title="Rules, checkouts and the files the agents depend on"
+                title={state.update?.available
+                  ? `${state.update.latest} is out — settings has the update`
+                  : 'Rules, checkouts and the files the agents depend on'}
+                marked={state.update?.available}
                 onClick={() => setSettingsOpen((s) => !s)}
               />
               <IconButton
@@ -320,7 +323,7 @@ export function App(): React.ReactElement {
             you were reading.
           */}
           {settingsOpen ? (
-            <Settings onClose={() => setSettingsOpen(false)} />
+            <Settings update={state.update} onClose={() => setSettingsOpen(false)} />
           ) : starting !== null ? (
             <StartingView where={starting} />
           ) : current ? (
@@ -1587,12 +1590,14 @@ function NameEditor(
 }
 
 function IconButton(
-  { label, title, onClick, on = false, className = '' }: {
+  { label, title, onClick, on = false, marked = false, className = '' }: {
     label: string;
     title: string;
     onClick: () => void;
     /** Lit as though hovered, for a button that is a switch. */
     on?: boolean;
+    /** A dot in the corner: something behind this button is waiting for you. */
+    marked?: boolean;
     className?: string;
   },
 ): React.ReactElement {
@@ -1600,9 +1605,10 @@ function IconButton(
     <button
       title={title}
       onClick={onClick}
-      className={`rounded px-1 ${on ? 'text-neutral-200' : 'text-neutral-500'} hover:bg-neutral-800 hover:text-neutral-200 ${className}`}
+      className={`relative rounded px-1 ${on ? 'text-neutral-200' : 'text-neutral-500'} hover:bg-neutral-800 hover:text-neutral-200 ${className}`}
     >
       {label}
+      {marked && <span className="absolute right-0 top-0 h-1.5 w-1.5 rounded-full bg-emerald-400" />}
     </button>
   );
 }

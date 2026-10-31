@@ -42,7 +42,7 @@ import {
 import { Ping } from './ping.js';
 import { Summaries } from './summary.js';
 import { Transcripts, feedTurns, subagentPathFor, subagentRows } from './transcript.js';
-import { install, isNewer, latestVersion, updatable } from './update.js';
+import { checkDue, checkForUpdate, install, isNewer, lastCheck, latestVersion, updatable } from './update.js';
 import { Usage } from './usage.js';
 
 // ---------------------------------------------------------------------------
@@ -1311,19 +1311,18 @@ app.post('/api/settings/permissions', async (_req, reply) => {
   }
 });
 
-/** Never throws: an unreachable registry is a line on the screen, not a broken one. */
-app.get('/api/update', async (): Promise<UpdateView> => {
-  const [latest, canUpdate] = await Promise.all([
-    latestVersion().then((v) => ({ v }), (err: Error) => ({ v: null, error: err.message })),
-    updatable(packageRoot),
-  ]);
-  return {
-    latest: latest.v,
-    available: isNewer(latest.v, runningVersion),
-    updatable: canUpdate,
-    ...('error' in latest ? { error: latest.error } : {}),
-  };
-});
+/** How often `checkDue` is asked; the check itself is daily. */
+const UPDATE_TICK_MS = 60 * 60_000;
+
+/** Broadcast whatever it found, so every tab's ⚙ and settings line agree. */
+async function checkUpdate(): Promise<UpdateView> {
+  const update = await checkForUpdate(runningVersion, packageRoot);
+  broadcast({ type: 'update', update });
+  return update;
+}
+
+/** `check` in settings: asks now rather than waiting out the day. */
+app.post('/api/update/check', checkUpdate);
 
 let updating = false;
 
@@ -1472,6 +1471,7 @@ wss.on('connection', (ws: WebSocket) => {
     herdrConnected: herdr.connected,
     version: runningVersion,
     prefs: prefs.get(),
+    update: lastCheck(),
   };
   ws.send(JSON.stringify(hello));
   // `hello` carries only whether Herdr is up; anything to SAY about it — down,
@@ -1584,6 +1584,9 @@ herdr.start();
 // Independent of the stream on purpose: the board must keep telling the truth
 // even when Herdr has handed our pushes to a newer subscriber.
 board.start();
+
+void checkUpdate();
+setInterval(() => { if (checkDue()) void checkUpdate(); }, UPDATE_TICK_MS).unref();
 
 const url = urlFor(port);
 const v = runningVersion ? `v${runningVersion} ` : '';

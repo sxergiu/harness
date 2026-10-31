@@ -12,7 +12,9 @@ import { modelLabel, useApi } from './useHarness.js';
  * board follows for a much better reason, and the reason it costs nothing here
  * is that this screen is read rarely and never while anything is moving.
  */
-export function Settings({ onClose }: { onClose: () => void }): React.ReactElement {
+export function Settings(
+  { update, onClose }: { update: UpdateView | null; onClose: () => void },
+): React.ReactElement {
   const { get, post } = useApi();
   const [view, setView] = useState<SettingsView | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -59,7 +61,7 @@ export function Settings({ onClose }: { onClose: () => void }): React.ReactEleme
       <header className="flex items-center gap-2 border-b border-neutral-800 px-3 py-1.5">
         <span className="text-neutral-300">settings</span>
         {view?.version && <span className="text-neutral-600">harness {view.version}</span>}
-        <Update onError={setError} />
+        <Update state={update} onError={setError} />
         <button onClick={onClose} className="ml-auto text-neutral-400 hover:text-neutral-200">
           close
         </button>
@@ -111,8 +113,9 @@ export function Settings({ onClose }: { onClose: () => void }): React.ReactEleme
 }
 
 /**
- * Whether npm has a newer harness, and moving onto it. Fetched apart from the
- * view, so a registry that does not answer costs this line and nothing else.
+ * Whether npm has a newer harness, and moving onto it. The server's daily check
+ * arrives over the socket, so this line and the ⚙ marker never disagree; `check`
+ * asks now, and its answer comes back the same way.
  *
  * Nothing here waits for the restart: the server comes back as the new version
  * and the socket's `hello` reloads the page, so this view is gone by then. If
@@ -121,15 +124,11 @@ export function Settings({ onClose }: { onClose: () => void }): React.ReactEleme
  */
 const RESTART_WAIT_MS = 45_000;
 
-function Update({ onError }: { onError: (message: string | null) => void }): React.ReactElement {
-  const { get, post } = useApi();
-  const [state, setState] = useState<UpdateView | null>(null);
-  const [phase, setPhase] = useState<'idle' | 'installing' | 'restarting'>('idle');
-
-  useEffect(() => {
-    get<UpdateView>('/api/update').then(setState, (e: Error) =>
-      setState({ latest: null, available: false, updatable: false, error: e.message }));
-  }, [get]);
+function Update(
+  { state, onError }: { state: UpdateView | null; onError: (message: string | null) => void },
+): React.ReactElement {
+  const { post } = useApi();
+  const [phase, setPhase] = useState<'idle' | 'checking' | 'installing' | 'restarting'>('idle');
 
   useEffect(() => {
     if (phase !== 'restarting') return;
@@ -152,13 +151,39 @@ function Update({ onError }: { onError: (message: string | null) => void }): Rea
     }
   };
 
-  if (state === null) return <span className="text-neutral-700">checking for updates…</span>;
-  if (state.latest === null) return <span className="text-neutral-700" title={state.error}>update check failed</span>;
-  if (!state.available) return <span className="text-neutral-700">up to date</span>;
-  if (!state.updatable) {
+  const check = async (): Promise<void> => {
+    onError(null);
+    setPhase('checking');
+    try {
+      await post('/api/update/check');
+    } catch (e) {
+      onError((e as Error).message);
+    }
+    setPhase('idle');
+  };
+
+  if (state === null || phase === 'checking') {
+    return <span className="text-neutral-700">checking for updates…</span>;
+  }
+  const checked = `checked ${new Date(state.checkedAt).toLocaleString()}`;
+  const recheck = (
+    <button onClick={() => void check()} className="text-neutral-500 hover:text-neutral-300">
+      check
+    </button>
+  );
+  if (state.latest === null || !state.available || !state.updatable) {
     return (
-      <span className="text-neutral-600">
-        {state.latest} is out — this one runs from a checkout, so update it there
+      <span className="flex items-center gap-2">
+        {state.latest === null ? (
+          <span className="text-neutral-700" title={state.error}>update check failed</span>
+        ) : !state.available ? (
+          <span className="text-neutral-700" title={checked}>up to date</span>
+        ) : (
+          <span className="text-neutral-600" title={checked}>
+            {state.latest} is out — this one runs from a checkout, so update it there
+          </span>
+        )}
+        {recheck}
       </span>
     );
   }

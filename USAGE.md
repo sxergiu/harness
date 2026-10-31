@@ -190,7 +190,9 @@ place to reach a checkout whose space has since gone.
 `⚙` beside `SPACES` opens one screen for everything about the install rather than the
 session:
 
-- **The header** shows the version running and asks npm whether a newer one is out. When
+- **The header** shows the version running and whether npm has a newer one. The cockpit asks
+  npm when it starts and once a day after that, and puts a dot on `⚙` when a newer version
+  is out; `check` asks now. When
   the harness is the global `npm install -g` copy, `update` installs it and restarts the
   cockpit into it, and the open tabs reload by themselves. Agents keep running. The
   restarted cockpit runs in the background, so it no longer belongs to the terminal you

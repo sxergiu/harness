@@ -8,15 +8,10 @@ notifications when one blocks, finishes, or dies.
 
 It runs on `127.0.0.1` for one person on one machine. It is never deployed.
 
-```
-┌────────┬───────────────────────────────────┐
-│ SPACES │ ⬤ debug-missing-uuid  web.app 12m │
-│ ▸ all  │   ▸ patch catalogue serializer    │
-│  w2 ·1 │   edit src/catalogue/mapper.ts    │
-│  w4 ·4 │ ◑ harness            harness  2m  │
-│ RECENT │ ○ run-onboarding     web.app 18m  │
-└────────┴───────────────────────────────────┘
-```
+![The cockpit over six agents in two spaces: opening one's feed, its own diff and running summary, asking a fork about it, prompting it, then answering an agent blocked on a permission prompt](docs/demo.gif)
+
+<sub>Six agents in two spaces, with invented data. Open an agent's feed, its own diff and summary; ask a fork about
+it without spending its turn; prompt it and watch the board re-sort; answer the one that is blocked.</sub>
 
 ## What it does
 

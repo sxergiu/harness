@@ -7,7 +7,7 @@ import {
 import { Stream, type ShellRunner } from './CodeBlock.js';
 import { useSelectionCopy } from './copyOnSelect.js';
 import { DiffTab } from './Diff.js';
-import { EntryRow, Feed, Spotlit, usePromptJump } from './Feed.js';
+import { EntryRow, Feed, Spotlit, type Step, usePromptJump } from './Feed.js';
 import type { FileViewer } from './fileRef.js';
 import { FileView } from './FileView.js';
 import { type Panels, panelsOf, rememberPanels } from './panels.js';
@@ -443,8 +443,8 @@ export function AgentView(
    */
   const [composing, setComposing] = useState<Composing | null>(null);
   const [composeText, setComposeText] = useState('');
-  /** Bumped to ask the feed to take you to your last prompt. */
-  const [jump, setJump] = useState(0);
+  /** Bumped to ask the feed to step to the previous or the next of your prompts. */
+  const [step, setStep] = useState<Step>({ n: 0, dir: 1 });
   /**
    * Opening an agent here focuses its pane in Herdr, so the terminal is always
    * showing whatever the browser is showing. This used to be a `terminal ↗`
@@ -845,7 +845,7 @@ export function AgentView(
             <Feed
               paneId={agent.paneId}
               tick={tick}
-              jump={jump}
+              step={step}
               viewer={viewer}
               runner={agent.live ? forkRunner : undefined}
             />
@@ -932,15 +932,7 @@ export function AgentView(
             subagents tab the same click would have to change tabs first, which
             is one button doing two things.
           */}
-          {tab === 'feed' && (
-            <button
-              onClick={() => setJump((n) => n + 1)}
-              title="Jump to your last prompt"
-              className="px-1 py-1 text-neutral-500 hover:text-neutral-200"
-            >
-              ⤒
-            </button>
-          )}
+          {tab === 'feed' && <PromptSteps onStep={setStep} />}
           {/*
             `field-sizing: content` sizes the field to its text, typed or pasted
             alike: one line when it holds one, growing as it wraps, up to
@@ -1017,6 +1009,35 @@ const FORKS = {
 /** Recorded runs of exactly this command that have printed — what landing is counted in. */
 const runsOf = (entries: FeedEntry[], command: string): number =>
   entries.filter((e) => e.kind === 'shell' && e.command === command && e.output !== null).length;
+
+/**
+ * ↑ over ↓, in the slot beside the prompt box, stepping between your prompts
+ * in whichever conversation the box belongs to. Stacked rather than side by
+ * side: the box is at least one line tall, so the pair fits without widening
+ * the dock, and a pair floating over the feed would cover its newest output.
+ * `leading-none` is what makes two glyphs the height of one input.
+ */
+function PromptSteps({ onStep }: { onStep: (f: (s: Step) => Step) => void }): React.ReactElement {
+  const press = (dir: Step['dir']) => (): void => onStep((s) => ({ n: s.n + 1, dir }));
+  return (
+    <div className="flex shrink-0 flex-col">
+      <button
+        onClick={press(-1)}
+        title="Your previous prompt"
+        className="px-1 leading-none text-neutral-500 hover:text-neutral-200"
+      >
+        ↑
+      </button>
+      <button
+        onClick={press(1)}
+        title="Your next prompt, or the end of the feed past the newest"
+        className="px-1 leading-none text-neutral-500 hover:text-neutral-200"
+      >
+        ↓
+      </button>
+    </div>
+  );
+}
 
 /**
  * A side conversation forked off this agent's session, so a question about what
@@ -1196,11 +1217,10 @@ function ForkPanel(
 
   // The fork's entries are only ever appended to, so an index is a stable key.
   const entries = view?.entries ?? [];
-  const asked = entries.findLastIndex((e) => e.kind === 'user');
-  const [jump, setJump] = useState(0);
-  const { view: scroller, prompt, end, setBody, room, flash } = usePromptJump(
-    asked < 0 ? null : String(asked),
-    jump,
+  const [step, setStep] = useState<Step>({ n: 0, dir: 1 });
+  const { view: scroller, end, setBody, room, refFor, flashing } = usePromptJump(
+    entries.flatMap((e, i) => (e.kind === 'user' ? [String(i)] : [])),
+    step,
   );
 
   return (
@@ -1251,9 +1271,9 @@ function ForkPanel(
       <div ref={scroller} className="min-h-0 flex-1 overflow-y-auto px-2 py-1">
         <div ref={setBody}>
           {entries.map((entry, i) =>
-            i === asked
+            entry.kind === 'user'
               ? (
-                <Spotlit key={i} ref={prompt} flash={flash}>
+                <Spotlit key={i} ref={refFor(String(i))} flash={flashing === String(i)}>
                   <EntryRow entry={entry} viewer={viewer} runner={runs?.runner} />
                 </Spotlit>
               )
@@ -1289,14 +1309,8 @@ function ForkPanel(
         <div ref={end} style={{ height: room }} />
       </div>
 
-      <div className="flex shrink-0 gap-2 border-t border-neutral-800 p-2">
-        <button
-          onClick={() => setJump((n) => n + 1)}
-          title="Jump to your last prompt"
-          className="px-1 py-1 text-neutral-500 hover:text-neutral-200"
-        >
-          ⤒
-        </button>
+      <div className="flex shrink-0 items-end gap-2 border-t border-neutral-800 p-2">
+        <PromptSteps onStep={setStep} />
         <input
           readOnly={busy}
           value={text}

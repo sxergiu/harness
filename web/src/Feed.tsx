@@ -14,18 +14,18 @@ import { useApi } from './useHarness.js';
  * Paginated by turn rather than by bytes: a turn is the unit the work is
  * actually shaped in, and transcripts reach a megabyte.
  *
- * `jump` is a counter the prompt bar bumps to mean "take me to my last prompt".
- * The feed owns what that means, because it is the only thing here that knows
- * which entry the human last typed.
+ * `step` is the prompt bar's ↑/↓, stepping between your prompts. The feed owns
+ * what that means, because it is the only thing here that knows which entries
+ * the human typed.
  *
  * `runner` is what makes the prose's shell blocks runnable, in the run fork.
  * Absent for an agent that has ended, where there is no session left to fork.
  */
 export function Feed(
-  { paneId, tick, jump, viewer, runner }: {
+  { paneId, tick, step, viewer, runner }: {
     paneId: string;
     tick: number;
-    jump: number;
+    step: Step;
     viewer?: FileViewer;
     runner?: ShellRunner;
   },
@@ -70,11 +70,7 @@ export function Feed(
     }
   };
 
-  const latest = latestPrompt(turns);
-  const { view, prompt, end, setBody, room, flash } = usePromptJump(
-    latest && `${latest.turn}:${latest.entry}`,
-    jump,
-  );
+  const { view, end, setBody, room, refFor, flashing } = usePromptJump(promptKeys(turns), step);
 
   // Three different nothings, which the panel used to report as one.
   if (turns.length === 0) {
@@ -108,12 +104,13 @@ export function Feed(
         {turns.map((t) => (
           <div key={t.index}>
             {t.entries.map((e, i) =>
-              latest && t.index === latest.turn && i === latest.entry
+              e.kind === 'user'
                 ? (
-                  // Wrapped rather than flagged through `EntryRow`: which prompt
-                  // is the latest is a fact about the feed, and `EntryRow` is
-                  // shared with the subagents tab, where there is no such thing.
-                  <Spotlit key={i} ref={prompt} flash={flash}>
+                  // Wrapped rather than flagged through `EntryRow`: which
+                  // entries are prompts to step between is a fact about the
+                  // feed, and `EntryRow` is shared with the subagents tab,
+                  // where there is no such thing.
+                  <Spotlit key={i} ref={refFor(keyOf(t.index, i))} flash={flashing === keyOf(t.index, i)}>
                     <EntryRow entry={e} viewer={viewer} runner={runner} />
                   </Spotlit>
                 )
@@ -133,46 +130,78 @@ export function Feed(
 }
 
 /**
- * "Take me to my last prompt", for any scrollport holding a conversation — the
- * feed, and the forks beside it, whose answers grow under a question exactly as
- * the agent's work does under yours. `latestKey` names the newest prompt and
- * changes when another lands; `jump` is the button's counter.
+ * Stepping between your prompts, for any scrollport holding a conversation —
+ * the feed, and the forks beside it, whose answers grow under a question
+ * exactly as the agent's work does under yours. `keys` name every prompt in
+ * order, newest last, and `step` is the pair of buttons.
  *
- * Your last prompt is where the work you are reading was asked for. It is the
- * one anchor in a feed that is otherwise all machine output, so the jump puts
- * it at the top of the viewport and everything since below it.
+ * Your prompts are where the work you are reading was asked for. They are the
+ * only anchors in a feed that is otherwise all machine output, so a step puts
+ * one at the top of the viewport and everything since below it. ↑ goes to the
+ * prompt before the one you are on, ↓ to the one after, and ↓ past your newest
+ * goes to the end of the feed, so the pair covers the whole conversation. A
+ * prompt landing spotlights itself, which is how sending one follows itself.
  *
  * The caller wires `view` to the scrollport, `setBody` to one box holding all
- * of the content, `prompt` to the newest prompt (through `Spotlit`, which
- * carries the flash), and `end` to a spacer after the body `room` pixels tall.
+ * of the content, every prompt to `refFor(key)` (through `Spotlit`, which
+ * carries the flash for the key in `flashing`), and `end` to a spacer after
+ * the body `room` pixels tall.
  */
-export function usePromptJump(latestKey: string | null, jump: number): {
+export interface Step {
+  /** Bumped per press; 0 is the mount value and means nothing was asked for yet. */
+  n: number;
+  /** -1 is ↑, towards older prompts; 1 is ↓. */
+  dir: -1 | 1;
+}
+
+export function usePromptJump(keys: string[], step: Step): {
   view: React.RefObject<HTMLDivElement | null>;
-  prompt: React.RefObject<HTMLDivElement | null>;
   end: React.RefObject<HTMLDivElement | null>;
   setBody: (el: HTMLDivElement | null) => void;
   room: number;
-  flash: boolean;
+  refFor: (key: string) => (el: HTMLDivElement | null) => void;
+  flashing: string | null;
 } {
   const view = useRef<HTMLDivElement>(null);
-  const prompt = useRef<HTMLDivElement>(null);
-  const [flash, setFlash] = useState(false);
+  const [flashing, setFlashing] = useState<string | null>(null);
 
   /**
-   * Room to scroll past the end, so the prompt can actually reach the top.
-   * Scrolling alone cannot get it there when it is the NEWEST prompt: nothing
-   * has been written under it yet, so the feed runs out of scroll with the
-   * prompt still near the foot of the screen — measured 719px down an 811px
-   * viewport, at maximum scroll. This is the shortfall and nothing more, so it
-   * is a screenful the moment you send a prompt and zero once the agent has
-   * filled that screen with work.
+   * Every prompt's element, by key. One callback ref per key, made once, so a
+   * render does not re-run every ref with null and then the element again.
+   */
+  const nodes = useRef(new Map<string, HTMLDivElement>());
+  const refs = useRef(new Map<string, (el: HTMLDivElement | null) => void>());
+  const refFor = useCallback((key: string) => {
+    let ref = refs.current.get(key);
+    if (!ref) {
+      ref = (el) => { if (el) nodes.current.set(key, el); else nodes.current.delete(key); };
+      refs.current.set(key, ref);
+    }
+    return ref;
+  }, []);
+
+  const latestKey = keys[keys.length - 1] ?? null;
+  // The newest prompt as a ref, so the measurement below reads it without
+  // re-attaching its observer every time a key lands.
+  const newest = useRef<string | null>(null);
+  newest.current = latestKey;
+
+  /**
+   * Room to scroll past the end, so the newest prompt can actually reach the
+   * top. Scrolling alone cannot get it there: nothing has been written under
+   * it yet, so the feed runs out of scroll with the prompt still near the foot
+   * of the screen — measured 719px down an 811px viewport, at maximum scroll.
+   * This is the shortfall and nothing more, so it is a screenful the moment you
+   * send a prompt and zero once the agent has filled that screen with work.
+   * Only the newest needs it: every older prompt has that one below it.
    *
-   * The measurement is `end` minus `prompt`, both live rects, which is the real
-   * content between them and is independent of the spacer's own height — so it
-   * settles in one pass instead of chasing itself. A `ResizeObserver` drives it
-   * rather than a render, because what invalidates it is content changing
-   * height, which is not the same event as this component rendering: the window
-   * resizing, a tool call being opened, markdown reflowing at a new width.
+   * The measurement is `end` minus the prompt, both live rects, which is the
+   * real content between them and is independent of the spacer's own height —
+   * so it settles in one pass instead of chasing itself. A `ResizeObserver`
+   * drives it rather than a render, because what invalidates it is content
+   * changing height, which is not the same event as this component rendering:
+   * the window resizing, a tool call being opened, markdown reflowing at a new
+   * width.
    */
   const end = useRef<HTMLDivElement>(null);
   const [room, setRoom] = useState(0);
@@ -186,9 +215,9 @@ export function usePromptJump(latestKey: string | null, jump: number): {
     const sc = view.current;
     if (!sc || !body) return;
     const measure = (): void => {
-      if (!prompt.current || !end.current) return setRoom(0);
-      const below = end.current.getBoundingClientRect().top
-        - prompt.current.getBoundingClientRect().top;
+      const prompt = newest.current === null ? undefined : nodes.current.get(newest.current);
+      if (!prompt || !end.current) return setRoom(0);
+      const below = end.current.getBoundingClientRect().top - prompt.getBoundingClientRect().top;
       const need = Math.max(0, Math.round(sc.clientHeight - below));
       setRoom((r) => (Math.abs(r - need) > 1 ? need : r));
     };
@@ -201,6 +230,15 @@ export function usePromptJump(latestKey: string | null, jump: number): {
   }, [body]);
 
   /**
+   * Where you are: a prompt's key, `end` for past the newest, or null before
+   * anything was asked for, which reads as the end — so the first ↑ lands on
+   * your newest prompt, as the one jump button always did. A key rather than
+   * an index, because loading earlier turns prepends prompts and would shift
+   * every index under you.
+   */
+  const at = useRef<string | null>(null);
+
+  /**
    * Instant, not smooth. `behavior: 'smooth'` never started here: sampled every
    * 100ms for a second after the call, the scroller had not moved a pixel,
    * while the same call without it lands immediately — a feed that refetches
@@ -211,24 +249,42 @@ export function usePromptJump(latestKey: string | null, jump: number): {
    * arrives in the same pass that measures the room it needs. Scrolling now
    * would scroll against the old, too-short feed.
    */
-  const spotlight = useCallback(() => {
-    setFlash(true);
-    requestAnimationFrame(() => prompt.current?.scrollIntoView({ block: 'start' }));
+  const spotlight = useCallback((key: string) => {
+    at.current = key;
+    setFlashing(key);
+    requestAnimationFrame(() => nodes.current.get(key)?.scrollIntoView({ block: 'start' }));
+  }, []);
+  const toEnd = useCallback(() => {
+    at.current = 'end';
+    setFlashing(null);
+    requestAnimationFrame(() => {
+      const sc = view.current;
+      if (sc) sc.scrollTop = sc.scrollHeight;
+    });
   }, []);
 
   useEffect(() => {
-    if (!flash) return;
-    const t = setTimeout(() => setFlash(false), 1500);
+    if (flashing === null) return;
+    const t = setTimeout(() => setFlashing(null), 1500);
     return () => clearTimeout(t);
-  }, [flash]);
+  }, [flashing]);
 
-  // The button. 0 is the mount value and means nothing was asked for yet.
+  // The buttons. Clamped at the first loaded prompt: ↑ there lands on it again,
+  // which the flash says; loading earlier turns is the feed's own button.
+  const held = useRef(keys);
+  held.current = keys;
   useEffect(() => {
-    if (jump > 0) spotlight();
-  }, [jump, spotlight]);
+    if (step.n === 0) return;
+    const list = held.current;
+    const here = at.current;
+    const pos = here === null || here === 'end' ? list.length : list.indexOf(here);
+    const next = (pos < 0 ? list.length : pos) + step.dir;
+    if (next >= list.length) toEnd();
+    else spotlight(list[Math.max(next, 0)]);
+  }, [step, spotlight, toEnd]);
 
   /**
-   * And the same jump when a new prompt lands, which is how sending one follows
+   * And a spotlight when a new prompt lands, which is how sending one follows
    * itself: the text reaches the transcript a beat after the send, so this
    * cannot fire from the click — it fires when the entry appears. A prompt
    * typed straight into the terminal moves the feed too, which is the same
@@ -240,16 +296,16 @@ export function usePromptJump(latestKey: string | null, jump: number): {
     const first = seen.current === null;
     const moved = seen.current !== latestKey;
     seen.current = latestKey;
-    if (moved && !first) spotlight();
+    if (moved && !first) spotlight(latestKey);
   }, [latestKey, spotlight]);
 
-  return { view, prompt, end, setBody, room, flash };
+  return { view, end, setBody, room, refFor, flashing };
 }
 
 /**
- * The newest prompt's wrapper. The flash is what tells you the jump happened at
- * all: landing on a prompt already near the top scrolls by nothing, and without
- * it that reads as a dead button. It grows the text a size as well as washing
+ * A prompt's wrapper. The flash is what tells you the jump happened at all:
+ * landing on a prompt already near the top scrolls by nothing, and without it
+ * that reads as a dead button. It grows the text a size as well as washing
  * the background, since a wash alone is easy to miss on a feed that is mostly
  * grey on black. Type size rather than a transform, because scaling a block
  * this wide pushes its right edge past the padding and the feed grows a
@@ -279,15 +335,16 @@ export function Spotlit(
   );
 }
 
-/** The newest thing the human typed. Slash commands open turns too, and are not it. */
-function latestPrompt(turns: FeedTurn[]): { turn: number; entry: number } | null {
-  for (let t = turns.length - 1; t >= 0; t--) {
-    const { index, entries } = turns[t];
-    for (let i = entries.length - 1; i >= 0; i--) {
-      if (entries[i].kind === 'user') return { turn: index, entry: i };
-    }
+/** A prompt's key in the feed: its turn and its place in it. */
+const keyOf = (turn: number, entry: number): string => `${turn}:${entry}`;
+
+/** Everything the human typed, oldest first. Slash commands open turns too, and are not it. */
+function promptKeys(turns: FeedTurn[]): string[] {
+  const keys: string[] = [];
+  for (const { index, entries } of turns) {
+    entries.forEach((e, i) => { if (e.kind === 'user') keys.push(keyOf(index, i)); });
   }
-  return null;
+  return keys;
 }
 
 function merge(prev: FeedTurn[], turn: FeedTurn | null): FeedTurn[] {

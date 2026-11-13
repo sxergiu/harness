@@ -561,7 +561,10 @@ export interface BlockedView {
 
 /** One limit bar of the `/usage` panel: what it measures, how full, when it resets. */
 export interface UsageLimit {
-  /** "session" or "week", from the panel's own heading. */
+  /**
+   * "session", "week (all models)", "week (sonnet only)" — the panel's own
+   * heading after `Current`, lowercased. There is more than one week.
+   */
   label: string;
   percent: number;
   /** "3:20am (Europe/Bucharest)" — verbatim, because it is already a sentence. */

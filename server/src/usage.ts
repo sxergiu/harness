@@ -218,11 +218,18 @@ export function cropPanel(pane: string): string {
  * appears nowhere else — the advice section says "87% of your usage", without
  * "used" — so prose cannot be mistaken for a limit.
  *
+ * The whole heading after `Current` is the label, because there is more than
+ * one week: read out of the 2.1.291 binary, the panel draws `Current session`,
+ * `Current week (all models)`, then `Current week (Sonnet only)` and a
+ * `Current week (<model>)` per model where the account has them. Keeping only
+ * the first word made every one of those `week`, and the board showed two
+ * bars with one name and different numbers.
+ *
  * Nothing here may throw. This is a dialog Claude Code redraws as it likes, and
  * a shape we do not recognise has to come back as no limits, which the browser
  * renders as the raw panel.
  */
-const LIMIT_HEADING = /^\s*Current (session|week)\b/i;
+const LIMIT_HEADING = /^\s*Current ((?:session|week)\b.*?)\s*$/i;
 const PERCENT = /(\d+)\s*%\s*used/i;
 const RESETS = /^\s*Resets\s+(.+?)\s*$/i;
 

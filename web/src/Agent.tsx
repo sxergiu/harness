@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   EFFORTS, MODELS, bashMode,
-  type AgentRow, type AsideView, type BlockedView, type EffortLevel, type FeedEntry, type ModelAlias,
-  type ShellTail,
+  type AgentRow, type AsideView, type BlockedView, type EffortLevel, type FeedEntry, type ForksView,
+  type ModelAlias, type ShellTail,
 } from '@harness/shared';
 import { Stream, type ShellRunner } from './CodeBlock.js';
 import { useSelectionCopy } from './copyOnSelect.js';
@@ -366,7 +366,7 @@ export function AgentView(
   const { post } = useApi();
   const root = useRef<HTMLDivElement>(null);
   const copied = useSelectionCopy(root, copyOnSelect);
-  const [tab, setTab] = useState<'feed' | 'diff' | 'subagents' | 'summary'>('feed');
+  const [tab, setTab] = useState<Tab>('feed');
   const [prompt, setPromptState] = useState(() => drafts.get(agent.paneId) ?? '');
   const setPrompt = (text: string): void => {
     setPromptState(text);
@@ -807,7 +807,7 @@ export function AgentView(
       {agent.status === 'blocked' && agent.live && <Blocked paneId={agent.paneId} />}
 
       <nav className="flex gap-3 border-b border-neutral-800 px-3">
-        {(['feed', 'diff', 'subagents', 'summary'] as const).map((t) => (
+        {(agent.live ? LIVE_TABS : CLOSED_TABS).map((t) => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -818,6 +818,9 @@ export function AgentView(
             {t}
             {t === 'diff' && agent.fileCount > 0 && (
               <span className="ml-1 text-neutral-600">·{agent.fileCount}</span>
+            )}
+            {t === 'fork' && agent.forks.length > 0 && (
+              <span className="ml-1 text-neutral-600">·{agent.forks.length}</span>
             )}
           </button>
         ))}
@@ -855,6 +858,7 @@ export function AgentView(
             <SubagentsTab paneId={agent.paneId} tick={tick} viewer={viewer} />
           )}
           {tab === 'summary' && <SummaryTab paneId={agent.paneId} tick={tick} viewer={viewer} />}
+          {tab === 'fork' && <ForksTab paneId={agent.paneId} tick={tick} viewer={viewer} />}
         </div>
         {forkOpen && (
           <>
@@ -984,6 +988,15 @@ interface RunRequest {
   code: string;
   language: string | null;
 }
+
+/**
+ * The tabs a row has. A closed row gains `fork`: its forks' panes are gone, so
+ * the split panel — which is a live conversation — has nothing to open, and
+ * what is left of them is read back as a tab like the feed is.
+ */
+const LIVE_TABS = ['feed', 'diff', 'subagents', 'summary'] as const;
+const CLOSED_TABS = [...LIVE_TABS, 'fork'] as const;
+type Tab = (typeof CLOSED_TABS)[number];
 
 /**
  * The two forks' differences, in one table for `ASSIGN`'s reason: one panel
@@ -1329,6 +1342,80 @@ function ForkPanel(
           {fork.verb}
         </button>
       </div>
+    </div>
+  );
+}
+
+/**
+ * A closed row's forks, read back off disk. One tab for both kinds rather than
+ * one each: most closed rows have one fork or none, the live layout already
+ * stacks the aside over the runs in one column, and a `runs` tab that is
+ * usually empty is a tab to click for nothing. Each is the exchange since the
+ * fork and nothing else — the conversation it was forked with is the feed tab.
+ */
+function ForksTab(
+  { paneId, tick, viewer }: { paneId: string; tick: number; viewer?: FileViewer },
+): React.ReactElement {
+  const { get } = useApi();
+  const [view, setView] = useState<ForksView | null>(null);
+  const [failed, setFailed] = useState<string | null>(null);
+
+  useEffect(() => {
+    let live = true;
+    void get<ForksView>(`/api/agents/${paneId}/forks`)
+      .then((v) => { if (live) { setView(v); setFailed(null); } })
+      .catch((e: Error) => { if (live) setFailed(e.message); });
+    return () => { live = false; };
+  }, [get, paneId, tick]);
+
+  if (!view) {
+    return failed
+      ? <p className="p-3 text-xs text-red-400">⚠ could not read the forks — {failed}</p>
+      : <div className="p-3 text-xs"><Spinner label="reading forks…" /></div>;
+  }
+
+  if (view.forks.length === 0) {
+    return (
+      <div className="p-3">
+        <p className="text-sm text-neutral-400">No fork was recorded for this conversation.</p>
+        <p className="mt-2 text-xs text-neutral-600">
+          A fork is recorded from the board while its agent is live, so a conversation closed
+          before this version has none. One forked off a session this agent later cleared is
+          dropped with it.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="h-full overflow-y-auto p-3 text-xs">
+      {view.forks.map((fork, i) => (
+        <section key={i} className={i > 0 ? 'mt-4 border-t border-neutral-800 pt-3' : ''}>
+          <div className="mb-2 flex items-baseline gap-2">
+            <span className="text-neutral-400">{FORKS[fork.kind].title}</span>
+            <span className="font-mono text-neutral-600" title={fork.sessionUuid}>
+              {fork.sessionUuid.slice(0, 8)}
+            </span>
+            {fork.view && fork.view.filesWritten > 0 && (
+              <span
+                className="text-amber-400"
+                title="a fork is not meant to change files — nothing prevented it"
+              >
+                ⚠ {fork.view.filesWritten} file{fork.view.filesWritten === 1 ? '' : 's'} written
+              </span>
+            )}
+          </div>
+          {fork.view === null
+            ? (
+              <p className="text-neutral-600">
+                Its transcript is gone — pruned on Claude Code’s retention timer.
+              </p>
+            )
+            : fork.view.entries.length === 0
+            ? <p className="text-neutral-600">Nothing was said since the fork.</p>
+            : fork.view.entries.map((e, j) => <EntryRow key={j} entry={e} viewer={viewer} />)}
+        </section>
+      ))}
     </div>
   );
 }

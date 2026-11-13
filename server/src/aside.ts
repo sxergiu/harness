@@ -73,10 +73,33 @@ export class Aside {
     if (!open) return EMPTY;
 
     const { info, fresh } = open;
+    return this.viewOf(fresh, info.cwd ?? parent.cwd, info);
+  }
+
+  /**
+   * A fork this agent once had, read back by the session the board recorded
+   * (`AgentRow.forks`) rather than by name — its pane is gone, so the name
+   * points nowhere and Herdr is not asked. Null when its transcript is gone
+   * too (invariant 9), which the tab says instead of showing nothing.
+   *
+   * The fork ran in the parent's directory (`start`), so the parent's cwd
+   * resolves its transcript. A recorded fork can only read as unrelated if the
+   * parent's transcript was rewritten under it, and nothing is the answer then.
+   */
+  recall(parent: AgentRow, parentEntries: Entry[], sessionUuid: string): AsideView | null {
+    const path = transcriptPathFor(parent.cwd, sessionUuid);
+    if (!path) return null;
+    const fork = this.transcripts.entries(path);
+    if (fork.length === 0) return null;
+    return this.viewOf(freshEntries(fork, parentEntries) ?? [], parent.cwd, null);
+  }
+
+  /** One shape for the live view and the recalled one, so the two cannot drift. */
+  private viewOf(fresh: Entry[], cwd: string, info: AgentInfo | null): AsideView {
     return {
-      paneId: info.pane_id,
-      status: info.agent_status === undefined ? null : asStatus(info.agent_status),
-      entries: feedTurns(fresh, info.cwd ?? parent.cwd).flatMap((t) => t.entries),
+      paneId: info?.pane_id ?? null,
+      status: info?.agent_status === undefined ? null : asStatus(info.agent_status),
+      entries: feedTurns(fresh, cwd).flatMap((t) => t.entries),
       // Over `fresh` and never over the whole fork, which would report the
       // parent's files as the aside's.
       filesWritten: touchedPaths(fresh).length,
@@ -162,7 +185,7 @@ export class Aside {
  * of the bookkeeping types, so counting those would make every new fork look
  * like it had already said something.
  */
-function freshEntries(fork: Entry[], parent: Entry[]): Entry[] | null {
+export function freshEntries(fork: Entry[], parent: Entry[]): Entry[] | null {
   const inherited = new Set<string>();
   for (const e of parent) if (e.uuid) inherited.add(e.uuid);
 

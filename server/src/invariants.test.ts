@@ -520,6 +520,21 @@ test('the two limit bars are read', () => {
   assert.equal(limitsOf(panel).length, 2);
 });
 
+test('every weekly limit keeps its qualifier, so two weeks are two bars with two names', () => {
+  // The headings as the 2.1.291 binary draws them. Labelling each by its first
+  // word alone gave `week` twice at different percentages, and a stored reading
+  // of `[session 55, week 10, week 4]` cannot say which is which.
+  const panel = [
+    'Current session', '55% used', 'Resets 3:20am',
+    'Current week (all models)', '10% used', 'Resets Nov 17',
+    'Current week (Sonnet only)', '4% used', 'Resets Nov 17',
+  ].join('\n');
+  assert.deepEqual(
+    limitsOf(panel).map((l) => [l.label, l.percent]),
+    [['session', 55], ['week (all models)', 10], ['week (sonnet only)', 4]],
+  );
+});
+
 // -- the model an agent runs on --------------------------------------------
 // Every wrong answer here is a plausible one: an agent started on a model
 // nobody chose looks exactly like one started right, and a window measured

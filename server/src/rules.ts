@@ -68,6 +68,10 @@ rules apply to everything you do here.
    a command leaves the human copying it by hand. This replaces any other advice
    you have about how to hand the human a command.
 
+10. Keep a table's cells to a word, a number or a short phrase. When a
+   comparison needs whole sentences per cell, do not widen the table: give one
+   short section per row instead, with the cases as bullets under it.
+
 Your changelist in the cockpit is built from your own Write and Edit tool calls.
 Two things are therefore invisible to the human reviewing your work: a file you
 change with a shell command, and a file changed by a SUBAGENT, whose calls are

@@ -168,7 +168,7 @@ function Table({ rows, viewer }: { rows: string[][]; viewer?: FileViewer }): Rea
               {header.map((cell, i) => (
                 <th
                   key={i}
-                  className={`border-b border-neutral-700 px-2 py-1 align-bottom font-semibold text-neutral-100 ${alignOf(i)}`}
+                  className={`whitespace-nowrap border-b border-neutral-700 px-2 py-1 align-bottom font-semibold text-neutral-100 ${alignOf(i)}`}
                 >
                   {inline(cell, viewer)}
                 </th>

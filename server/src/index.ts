@@ -10,7 +10,8 @@ import { WebSocketServer, type WebSocket } from 'ws';
 import {
   AGENT_SHADES, BIND_HOST, DEFAULT_PORT, DEV_PAGE_PORT, EFFORTS, MODELS, WS_PATH, bashMode,
   type AccountView, type AgentDiff, type AgentShade, type AsideView, type BlockedView,
-  type FeedEntry, type FeedPage, type FileCandidates, type FileContent, type HerdrRuleState, type PermissionsState,
+  type FeedEntry, type FeedPage, type FileCandidates, type FileContent, type ForksView, type HerdrRuleState,
+  type PermissionsState,
   type ServerEvent, type SettingsView, type ShellTail, type SubagentsView, type SummaryView, type UpdateView,
   type UsageView,
 } from '@harness/shared';
@@ -426,6 +427,27 @@ for (const [path, fork] of FORKS) {
     }
   });
 }
+
+/**
+ * Every fork this agent has had, read back off disk by the sessions the board
+ * recorded — the closed row's form of the two routes above, where the forks'
+ * panes are gone and their names point nowhere. Nothing is asked of Herdr, and
+ * nothing here reaches the changelist or the contention join: the fork's file
+ * holds the parent's writes, and diffing it would claim them again.
+ */
+app.get<{ Params: { paneId: string } }>('/api/agents/:paneId/forks', async (req, reply) => {
+  const row = board.row(req.params.paneId);
+  if (!row) return reply.code(404).send({ error: 'no such agent' });
+  const entries = board.entries(req.params.paneId);
+  const byKind = new Map<string, Aside>(FORKS);
+  const view: ForksView = {
+    forks: row.forks.map((ref) => ({
+      ...ref,
+      view: byKind.get(ref.kind)?.recall(row, entries, ref.sessionUuid) ?? null,
+    })),
+  };
+  return view;
+});
 
 app.get<{ Params: { paneId: string } }>('/api/agents/:paneId/diff', async (req, reply) => {
   const row = board.row(req.params.paneId);

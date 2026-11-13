@@ -1,6 +1,6 @@
 import { basename } from 'node:path';
 import {
-  STATUS_ORDER, type AgentRow, type AgentShade, type AgentStatus, type WorkspaceRow,
+  STATUS_ORDER, type AgentRow, type AgentShade, type ForkRef, type WorkspaceRow,
 } from '@harness/shared';
 import { ASIDE_FORK, ASIDE_PREFIX, RUN_FORK, asideName } from './aside.js';
 import { answerChromeDialog, forgetPane as forgetChromeDialog } from './chrome.js';
@@ -111,6 +111,15 @@ export class Board {
    * a restart in the same way `stateSince` is unknown after one.
    */
   private forked = new Set<string>();
+  /**
+   * paneId → every fork seen on this agent's current session, oldest first, by
+   * the session each runs under. The one pane-keyed fact that is MEANT to reach
+   * RECENT: it is set on the row in `resync`, which is where `history.remember`
+   * reads from, so a closed row keeps the way back to its forks' transcripts.
+   * Dropped with the pane and on `/clear` like `forked`, and empty after a
+   * restart until the next heartbeat sees the forks again by name.
+   */
+  private forkSessions = new Map<string, ForkRef[]>();
   /**
    * paneId → the slot it is held at within its own space. The lock is on the
    * AGENT, so locking one says nothing about the others: they keep the attention
@@ -346,6 +355,23 @@ export class Board {
     return this.rows.get(paneId) ?? this.history.all().find((r) => r.paneId === paneId);
   }
 
+  /**
+   * Notes each of this parent's forks under the session it runs, once. The same
+   * fork is in every heartbeat, so a uuid already listed is skipped; a refork
+   * is a new agent with a new uuid and is appended. The session lands on the
+   * fork's pane ~1.4s after its start, so a fork is recorded by the heartbeat
+   * after the one that saw it launch.
+   */
+  private recordForks(paneId: string, forks: Map<string, PaneInfo>): void {
+    for (const [kind, fork] of [['aside', ASIDE_FORK], ['run', RUN_FORK]] as const) {
+      const sessionUuid = forks.get(asideName(paneId, fork.suffix))?.agent_session?.value;
+      if (!sessionUuid) continue;
+      const list = this.forkSessions.get(paneId) ?? [];
+      if (list.some((f) => f.sessionUuid === sessionUuid)) continue;
+      this.forkSessions.set(paneId, [...list, { kind, sessionUuid }]);
+    }
+  }
+
   workspace(id: string): WorkspaceRow | undefined {
     return this.workspaces.find((w) => w.id === id);
   }
@@ -526,7 +552,7 @@ export class Board {
 
     // A pass of its own because a fork's pane may be iterated either side of
     // its parent's, and the loop below skips it as an instrument regardless.
-    const forks = forkStatuses(panes, names);
+    const forks = forkPanes(panes, names);
 
     // Where a per-agent switch gets undone, and where a pinned machine default
     // is put back. On this heartbeat rather than a timer of its own, because a
@@ -555,6 +581,10 @@ export class Board {
       // out of a conversation that no longer exists.
       if (prev && prev.sessionUuid !== null && prev.sessionUuid !== sessionUuid) {
         this.onSessionGone(p.pane_id);
+        // A fork of the old session compares against the new transcript as two
+        // unrelated conversations, so a record of it is one the tab could never
+        // show. The list is per session, as the uuid it is keyed on is.
+        this.forkSessions.delete(p.pane_id);
       }
       // Re-resolved every time: the session id changes on /clear, and the
       // transcript can be pruned out from under us.
@@ -586,10 +616,12 @@ export class Board {
         : existing ?? desired ?? p.agent ?? 'claude';
       used.add(name);
 
-      // The fork's Herdr status, and only that. Named after this pane, so a
+      // The fork's Herdr status, and its session. Named after this pane, so a
       // harness restart finds it again exactly as the panel does.
-      const fork = forks.get(asideName(p.pane_id));
+      const forkPane = forks.get(asideName(p.pane_id));
+      const fork = forkPane === undefined ? undefined : asStatus(forkPane.agent_status);
       if (fork !== undefined) this.forked.add(p.pane_id);
+      this.recordForks(p.pane_id, forks);
 
       const changed = prev !== undefined && prev.status !== status;
       const row: AgentRow = {
@@ -624,6 +656,9 @@ export class Board {
         fileCount: paths.length,
         contendedWith: [],
         aside: fork ?? (this.forked.has(p.pane_id) ? 'cleared' : null),
+        // Set HERE and not in `agents()`, the one of the pane-keyed facts that
+        // is meant to ride the remembered row onto disk.
+        forks: this.forkSessions.get(p.pane_id) ?? [],
         // Never set here: `agents()` is the author, so none of these can ride a
         // remembered row onto disk against a pane id Herdr recycles.
         shade: null,
@@ -670,6 +705,7 @@ export class Board {
       // Herdr restart looks exactly like every pane going, and `Shades` is
       // bounded by recency instead.
       this.forked.delete(paneId);
+      this.forkSessions.delete(paneId);
       this.locks.delete(paneId);
       this.switchedTo.delete(paneId);
       this.startedBy.delete(paneId);
@@ -944,20 +980,22 @@ function isInstrument(name: string | undefined): boolean {
 const isAside = (name: string | undefined): boolean => name?.startsWith(ASIDE_PREFIX) ?? false;
 
 /**
- * Fork name → the status of the pane running it, for the one dot a fork gets on
- * its parent's row. Keyed by name because `asideName` is the only mapping there
- * is between a parent and its fork, and it does not invert.
+ * Fork name → the pane running it, for the one dot a fork gets on its parent's
+ * row and the session it is recorded under. Keyed by name because `asideName`
+ * is the only mapping there is between a parent and its fork, and it does not
+ * invert.
  *
- * Nothing else about the fork is read, and nothing has to be: its pane is
- * already in the snapshot the heartbeat fetched, so this costs no request. The
- * `agent` guard is the main loop's own — a fork is present when its agent is,
- * not when a pane that once held one still exists.
+ * Only the pane's status and session are read, and nothing has to be read
+ * elsewhere: its pane is already in the snapshot the heartbeat fetched, so
+ * this costs no request. Never its transcript (invariant 18). The `agent`
+ * guard is the main loop's own — a fork is present when its agent is, not when
+ * a pane that once held one still exists.
  */
-function forkStatuses(panes: PaneInfo[], names: Map<string, string>): Map<string, AgentStatus> {
-  const out = new Map<string, AgentStatus>();
+function forkPanes(panes: PaneInfo[], names: Map<string, string>): Map<string, PaneInfo> {
+  const out = new Map<string, PaneInfo>();
   for (const p of panes) {
     const name = names.get(p.pane_id);
-    if (p.agent && name !== undefined && isAside(name)) out.set(name, asStatus(p.agent_status));
+    if (p.agent && name !== undefined && isAside(name)) out.set(name, p);
   }
   return out;
 }

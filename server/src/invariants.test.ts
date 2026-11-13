@@ -4,7 +4,7 @@ import { join, resolve } from 'node:path';
 import { test } from 'node:test';
 import { aliasRuns, bashMode, sameAccount } from '@harness/shared';
 import { parse as parseAccounts, rowFor, statusOf } from './account.js';
-import { ASIDE_PREFIX, RUN_FORK, asideName } from './aside.js';
+import { ASIDE_PREFIX, RUN_FORK, asideName, freshEntries } from './aside.js';
 import { dormantSession, launchStalled, seedCwd } from './board.js';
 import {
   HOLD_MS, decide, directoriesIn, grantOf, holdFor, mayTrust, pinAction, settleAction, trustKey,
@@ -956,6 +956,39 @@ test('a cockpit already on screen gets no second copy', () => {
   assert.equal(shouldOpen(instance({ page: true, viewers: 1 })), false);
 });
 
+// -- the exchange since the fork -------------------------------------------
+// A fork's transcript is the parent's whole conversation under a new id plus
+// what the fork said (invariant 18). Every wrong answer here is plausible on
+// screen: the parent's conversation rendered beside itself reads as a long
+// fork, and a fresh fork counted as "already said something" reads as one.
+
+test('a fork holding only the parent\'s entries, plus uuid-less bookkeeping, has said nothing', () => {
+  const u = (uuid: string, extra = {}): Entry => ({ type: 'user', uuid, ...extra }) as unknown as Entry;
+  const parent = [u('a'), u('b'), { type: 'mode' } as unknown as Entry];
+  const fork = [u('a'), u('b'), { type: 'mode' } as unknown as Entry, { type: 'last-prompt' } as unknown as Entry];
+  assert.deepEqual(freshEntries(fork, parent), []);
+});
+
+test('only the entries the parent never had are the fork\'s, in order', () => {
+  const u = (uuid: string): Entry => ({ type: 'user', uuid }) as unknown as Entry;
+  const parent = [u('a'), u('b')];
+  const fork = [u('a'), u('b'), u('q1'), u('r1'), { type: 'mode' } as unknown as Entry, u('q2')];
+  assert.deepEqual(freshEntries(fork, parent)?.map((e) => e.uuid), ['q1', 'r1', 'q2']);
+});
+
+test('a pruned parent answers nothing, never the fork\'s whole conversation', () => {
+  const u = (uuid: string): Entry => ({ type: 'user', uuid }) as unknown as Entry;
+  assert.deepEqual(freshEntries([u('a'), u('q1')], []), []);
+  assert.deepEqual(freshEntries([u('a'), u('q1')], [{ type: 'mode' } as unknown as Entry]), []);
+});
+
+test('a fork sharing no entry with the parent is another conversation, not a long exchange', () => {
+  const u = (uuid: string): Entry => ({ type: 'user', uuid }) as unknown as Entry;
+  assert.equal(freshEntries([u('x'), u('y')], [u('a')]), null);
+  // An empty fork transcript is a fork that has not written yet, not a stranger.
+  assert.deepEqual(freshEntries([], [u('a')]), []);
+});
+
 // -- RECENT survives its own format change --------------------------------
 // A cache, so an unreadable one is only ever a lost row — but a row that
 // arrives without a paneId or a name renders as a blank entry that cannot be
@@ -969,6 +1002,28 @@ test('the pre-version bare array is still read, not thrown away', () => {
 
 test('a version it does not know is discarded rather than guessed at', () => {
   assert.equal(parseRecent('{"version":99,"rows":[{"paneId":"w2:pA","name":"x"}]}').length, 0);
+});
+
+test('a remembered fork is kept by shape, and a row from before the field has none', () => {
+  // The uuid is joined into a path on disk, which is why this one field is
+  // read by shape where the rest are filled: a non-string there throws in
+  // `path.join`, and a kind that is neither fork names no reader.
+  const rows = parseRecent(JSON.stringify({
+    version: 1,
+    rows: [
+      { paneId: 'w2:pA', name: 'old' },
+      { paneId: 'w2:pB', name: 'forked', forks: [
+        { kind: 'aside', sessionUuid: 'a-1' }, { kind: 'run', sessionUuid: 'r-1' },
+        { kind: 'other', sessionUuid: 'x' }, { kind: 'aside', sessionUuid: 7 }, null, 'junk',
+      ] },
+      { paneId: 'w2:pC', name: 'junk', forks: 'not a list' },
+    ],
+  }));
+  assert.deepEqual(rows.map((r) => r.forks), [
+    [],
+    [{ kind: 'aside', sessionUuid: 'a-1' }, { kind: 'run', sessionUuid: 'r-1' }],
+    [],
+  ]);
 });
 
 test('rows missing the two fields the column cannot render without are dropped', () => {

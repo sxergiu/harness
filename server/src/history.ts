@@ -1,7 +1,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
-import type { AgentRow } from '@harness/shared';
+import type { AgentRow, ForkRef } from '@harness/shared';
 
 /**
  * Agents whose panes are gone. Herdr forgets them immediately; this remembers
@@ -43,6 +43,8 @@ export class History {
   remember(row: AgentRow): void {
     // `aside` goes with `contendedWith`, and for the same reason: a fork's
     // status was a claim about now, and a closed agent cannot be forked again.
+    // `forks` stays: it is a record of which sessions those forks ran under,
+    // and the only way back to their transcripts once the panes are gone.
     const dead: AgentRow = { ...row, live: false, dormant: false, stalled: false, contendedWith: [], aside: null };
     this.rows = [dead, ...this.rows.filter((r) => r.paneId !== row.paneId)].slice(0, LIMIT);
     this.save();
@@ -97,6 +99,11 @@ export class History {
  * `alias` is filled rather than kept, and that is a statement: it belongs to a
  * LIVE pane, `agents()` is its only author, and a closed agent inherits nothing
  * from whoever holds that pane id next.
+ *
+ * `forks` is the one field read back by SHAPE rather than filled, and it is the
+ * one step past the policy above: each entry's uuid is joined into a path on
+ * disk (`transcriptPathFor`), where every other remembered field is only ever
+ * rendered. A row from before the field reads as having none.
  */
 export function parse(text: string): AgentRow[] {
   const doc = JSON.parse(text) as unknown;
@@ -113,5 +120,23 @@ export function parse(text: string): AgentRow[] {
       typeof r === 'object' && r !== null
       && typeof (r as AgentRow).paneId === 'string'
       && typeof (r as AgentRow).name === 'string')
-    .map((r) => ({ ...r, model: r.model ?? null, effort: r.effort ?? null, alias: null, launching: false, dormant: false, stalled: false }));
+    .map((r) => ({
+      ...r,
+      model: r.model ?? null,
+      effort: r.effort ?? null,
+      forks: forksOf(r.forks),
+      alias: null,
+      launching: false,
+      dormant: false,
+      stalled: false,
+    }));
+}
+
+/** The fork records that are what `ForkRef` says, and nothing else. */
+function forksOf(value: unknown): ForkRef[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((f: unknown): f is ForkRef =>
+    typeof f === 'object' && f !== null
+    && ((f as ForkRef).kind === 'aside' || (f as ForkRef).kind === 'run')
+    && typeof (f as ForkRef).sessionUuid === 'string');
 }

@@ -449,7 +449,9 @@ function UsageDock(
               {/* The lit blocks are the only coloured thing here, so they are
                   the only thing your eye is pulled to. */}
               <div className="flex items-center gap-2">
-                <span className="w-12 shrink-0 text-neutral-500">{limit.label}</span>
+                <span className="w-28 shrink-0 truncate text-neutral-500" title={limit.label}>
+                  {limit.label}
+                </span>
                 <span className="flex min-w-0 flex-1 gap-px">
                   {Array.from({ length: BLOCKS }, (_, i) => (
                     <span
@@ -468,7 +470,7 @@ function UsageDock(
                 90% and a session at 10% is exactly when you need the other date.
               */}
               {limit.resets && (
-                <div className="truncate pl-14 text-neutral-600" title={limit.resets}>
+                <div className="truncate pl-30 text-neutral-600" title={limit.resets}>
                   resets {limit.resets}
                 </div>
               )}

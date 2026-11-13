@@ -4,7 +4,7 @@ import { join, resolve } from 'node:path';
 import { test } from 'node:test';
 import { aliasRuns, bashMode, sameAccount } from '@harness/shared';
 import { parse as parseAccounts, rowFor, statusOf } from './account.js';
-import { ASIDE_PREFIX, RUN_FORK, asideName } from './aside.js';
+import { ASIDE_PREFIX, RUN_FORK, asideName, freshEntries } from './aside.js';
 import { dormantSession, launchStalled, seedCwd } from './board.js';
 import {
   HOLD_MS, decide, directoriesIn, grantOf, holdFor, mayTrust, pinAction, settleAction, trustKey,
@@ -954,6 +954,39 @@ test('a built cockpit nobody is looking at IS opened — that is the feature', (
 test('a cockpit already on screen gets no second copy', () => {
   // `open` gives you a new tab rather than the one you already have.
   assert.equal(shouldOpen(instance({ page: true, viewers: 1 })), false);
+});
+
+// -- the exchange since the fork -------------------------------------------
+// A fork's transcript is the parent's whole conversation under a new id plus
+// what the fork said (invariant 18). Every wrong answer here is plausible on
+// screen: the parent's conversation rendered beside itself reads as a long
+// fork, and a fresh fork counted as "already said something" reads as one.
+
+test('a fork holding only the parent\'s entries, plus uuid-less bookkeeping, has said nothing', () => {
+  const u = (uuid: string, extra = {}): Entry => ({ type: 'user', uuid, ...extra }) as unknown as Entry;
+  const parent = [u('a'), u('b'), { type: 'mode' } as unknown as Entry];
+  const fork = [u('a'), u('b'), { type: 'mode' } as unknown as Entry, { type: 'last-prompt' } as unknown as Entry];
+  assert.deepEqual(freshEntries(fork, parent), []);
+});
+
+test('only the entries the parent never had are the fork\'s, in order', () => {
+  const u = (uuid: string): Entry => ({ type: 'user', uuid }) as unknown as Entry;
+  const parent = [u('a'), u('b')];
+  const fork = [u('a'), u('b'), u('q1'), u('r1'), { type: 'mode' } as unknown as Entry, u('q2')];
+  assert.deepEqual(freshEntries(fork, parent)?.map((e) => e.uuid), ['q1', 'r1', 'q2']);
+});
+
+test('a pruned parent answers nothing, never the fork\'s whole conversation', () => {
+  const u = (uuid: string): Entry => ({ type: 'user', uuid }) as unknown as Entry;
+  assert.deepEqual(freshEntries([u('a'), u('q1')], []), []);
+  assert.deepEqual(freshEntries([u('a'), u('q1')], [{ type: 'mode' } as unknown as Entry]), []);
+});
+
+test('a fork sharing no entry with the parent is another conversation, not a long exchange', () => {
+  const u = (uuid: string): Entry => ({ type: 'user', uuid }) as unknown as Entry;
+  assert.equal(freshEntries([u('x'), u('y')], [u('a')]), null);
+  // An empty fork transcript is a fork that has not written yet, not a stranger.
+  assert.deepEqual(freshEntries([], [u('a')]), []);
 });
 
 // -- RECENT survives its own format change --------------------------------

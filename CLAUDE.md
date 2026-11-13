@@ -565,6 +565,18 @@ is kept off the board.
   has `/clear`ed. The aside is reaped rather than answered from. `board.ts` reports a
   session ending — pane closed OR session id changed — because the panel shuts itself on
   `/clear` and would otherwise never ask again, leaving the fork running.
+- **A closed row keeps its forks, as a `fork` tab.** The fork's SESSION is recorded against
+  the parent (`AgentRow.forks`, kind and uuid, oldest first) off the same heartbeat snapshot
+  that gives the ring its status — the fork's pane carries `agent_session` like any other —
+  and unlike every other pane-keyed fact it is set on the row in `resync`, so that
+  `history.remember` carries it into RECENT. Dropped on `/clear` with the ring's trace, since
+  a fork of the old session compares against the new transcript as a stranger. `recall` in
+  `aside.ts` reads the fork back by that uuid in the parent's cwd (it was forked there) and
+  derives the exchange by the same `freshEntries` rule, never by name and never through
+  Herdr; a pruned fork says so, and the parent being pruned shows nothing (invariant 9). One
+  tab for both forks, and a tab rather than the split: nothing is running any more. The
+  split panel stays live-only. Still off the changelist and the contention join, since the
+  fork's file holds the parent's writes.
 - **Reforking is closing.** With no aside left, the next question forks afresh from wherever
   the parent has got to, so `refork` and `×` are one route and differ only in whether the
   panel stays open. Closing is `tab.close`, never `/exit`: it ends the agent AND removes the

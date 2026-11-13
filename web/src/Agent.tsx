@@ -1217,11 +1217,10 @@ function ForkPanel(
 
   // The fork's entries are only ever appended to, so an index is a stable key.
   const entries = view?.entries ?? [];
-  const asked = entries.findLastIndex((e) => e.kind === 'user');
-  const [jump, setJump] = useState(0);
-  const { view: scroller, prompt, end, setBody, room, flash } = usePromptJump(
-    asked < 0 ? null : String(asked),
-    jump,
+  const [step, setStep] = useState<Step>({ n: 0, dir: 1 });
+  const { view: scroller, end, setBody, room, refFor, flashing } = usePromptJump(
+    entries.flatMap((e, i) => (e.kind === 'user' ? [String(i)] : [])),
+    step,
   );
 
   return (
@@ -1272,9 +1271,9 @@ function ForkPanel(
       <div ref={scroller} className="min-h-0 flex-1 overflow-y-auto px-2 py-1">
         <div ref={setBody}>
           {entries.map((entry, i) =>
-            i === asked
+            entry.kind === 'user'
               ? (
-                <Spotlit key={i} ref={prompt} flash={flash}>
+                <Spotlit key={i} ref={refFor(String(i))} flash={flashing === String(i)}>
                   <EntryRow entry={entry} viewer={viewer} runner={runs?.runner} />
                 </Spotlit>
               )
@@ -1310,14 +1309,8 @@ function ForkPanel(
         <div ref={end} style={{ height: room }} />
       </div>
 
-      <div className="flex shrink-0 gap-2 border-t border-neutral-800 p-2">
-        <button
-          onClick={() => setJump((n) => n + 1)}
-          title="Jump to your last prompt"
-          className="px-1 py-1 text-neutral-500 hover:text-neutral-200"
-        >
-          ⤒
-        </button>
+      <div className="flex shrink-0 items-end gap-2 border-t border-neutral-800 p-2">
+        <PromptSteps onStep={setStep} />
         <input
           readOnly={busy}
           value={text}

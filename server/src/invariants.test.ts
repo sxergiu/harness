@@ -1344,8 +1344,12 @@ test('A CANCEL IS NULL and a failure throws, per platform', () => {
   const ran = (code: number, stdout: string, stderr = '') => ({ code, stdout, stderr });
   assert.equal(pickedFrom('win32', ran(0, '')), null);
   assert.throws(() => pickedFrom('win32', ran(1, '', 'Add-Type failed')), /Add-Type failed/);
-  assert.equal(pickedFrom('darwin', ran(1, '', 'execution error: User canceled. (-128)')), null);
-  assert.throws(() => pickedFrom('darwin', ran(1, '', 'not authorized')), /not authorized/);
+  // The applet writes its answer file in every case, so an empty one is an
+  // applet that never got to answer, never a cancel.
+  assert.equal(pickedFrom('darwin', ran(0, 'CANCEL')), null);
+  assert.throws(() => pickedFrom('darwin', ran(0, 'ERR\nnot authorized (-1743)')), /not authorized/);
+  assert.throws(() => pickedFrom('darwin', ran(0, '')), /without answering/);
+  assert.throws(() => pickedFrom('darwin', ran(1, '', 'osacompile: syntax error')), /syntax error/);
   // zenity prints this on an ordinary cancel; it is not a failure.
   assert.equal(pickedFrom('linux', ran(1, '', 'Gtk-Message: GtkDialog mapped without a transient parent')), null);
   assert.throws(() => pickedFrom('linux', ran(255, '')), /exit 255/);
@@ -1357,8 +1361,8 @@ test('a picked path comes back whole, without the separator osascript adds', () 
   const ok = (stdout: string) => ({ code: 0, stdout, stderr: '' });
   assert.equal(pickedFrom('win32', ok('C:\\Users\\Șerban\\proiect ăîâ')), 'C:\\Users\\Șerban\\proiect ăîâ');
   assert.equal(pickedFrom('win32', ok('C:\\')), 'C:\\');
-  assert.equal(pickedFrom('darwin', ok('/Users/a/repo/\n')), '/Users/a/repo');
-  assert.equal(pickedFrom('darwin', ok('/\n')), '/');
+  assert.equal(pickedFrom('darwin', ok('OK\n/Users/a/répo/')), '/Users/a/répo');
+  assert.equal(pickedFrom('darwin', ok('OK\n/')), '/');
   assert.equal(pickedFrom('linux', ok('/home/a/repo\n')), '/home/a/repo');
 });
 

@@ -463,9 +463,13 @@ server/src/
   origin.ts           who may talk to an unauthenticated server. THE security boundary
   picker.ts           the OS folder dialog a space's directory is chosen with, opened
                       by this process since a page never learns an absolute path.
-                      On Windows (IFileOpenDialog via PowerShell) the shim compiles
-                      and the dialog has never been opened; macOS and Linux are
-                      written from docs and pinned only by tests
+                      On macOS it is an applet compiled into `~/.harness`, because
+                      nothing a background process can ask of osascript, System
+                      Events or Finder puts a dialog in front of the browser —
+                      measured, every one left it open behind Chrome. On Windows
+                      (IFileOpenDialog via PowerShell) the shim compiles and the
+                      dialog has never been opened; Linux is written from docs and
+                      pinned only by tests
   usage.ts            the account's limit bars, read through an agent of our own
   ping.ts             ↻'s second job, on its own route: a FRESH agent of ours,
                       sent "ping" and closed once it answers — which wakes agents

@@ -5,8 +5,8 @@ import { ExternalLink, Linkified, urlOf } from './links.js';
 /**
  * Deliberately tiny markdown renderer — enough to make SPEC.md readable when
  * judging an interview's output, without pulling in a dependency. Handles
- * headings, bullets, inline code, bold, fenced code, and paragraphs. Anything
- * else renders as plain text rather than breaking.
+ * headings, bullets, inline code, bold, fenced code, pipe tables, and
+ * paragraphs. Anything else renders as plain text rather than breaking.
  *
  * `viewer` makes a code span that names a file clickable. Optional, so prose
  * with nowhere to open a file into still renders — and threaded as a prop rather
@@ -23,6 +23,7 @@ export function Markdown(
   let list: string[] = [];
   let para: string[] = [];
   let fence: { lang: string; lines: string[] } | null = null;
+  let table: string[][] | null = null;
 
   const flushList = (): void => {
     if (!list.length) return;
@@ -44,7 +45,12 @@ export function Markdown(
     );
     para = [];
   };
-  const flush = (): void => { flushList(); flushPara(); };
+  const flushTable = (): void => {
+    if (!table) return;
+    blocks.push(<Table key={blocks.length} rows={table} viewer={viewer} />);
+    table = null;
+  };
+  const flush = (): void => { flushList(); flushPara(); flushTable(); };
   const flushFence = (): void => {
     if (!fence) return;
     blocks.push(
@@ -95,9 +101,18 @@ export function Markdown(
     }
 
     const bullet = /^[-*]\s+(.*)$/.exec(line);
-    if (bullet) { flushPara(); list.push(bullet[1]); continue; }
+    if (bullet) { flushPara(); flushTable(); list.push(bullet[1]); continue; }
 
-    flushList();
+    // A table is a run of pipe lines. Left as paragraph text, its rows joined
+    // into one line of pipes — which is what every comparison an agent wrote
+    // as a table looked like.
+    if (/^\s*\|.*\|\s*$/.test(line)) {
+      flushList(); flushPara();
+      (table ??= []).push(cells(line));
+      continue;
+    }
+
+    flushList(); flushTable();
     para.push(line.trim());
   }
   flush();
@@ -105,6 +120,76 @@ export function Markdown(
   flushFence();
 
   return <div>{blocks}</div>;
+}
+
+/**
+ * One pipe line's cells, with the outer pipes dropped. A `\|` is a pipe inside
+ * a cell, which is how a table holds `a | b` in a code span.
+ */
+function cells(line: string): string[] {
+  return line.trim().replace(/^\|/, '').replace(/\|$/, '')
+    .split(/(?<!\\)\|/)
+    .map((c) => c.replace(/\\\|/g, '|').trim());
+}
+
+/** The `|---|:--:|--:|` line under a header row, read for the alignment it sets. */
+const ALIGN_ROW = /^:?-+:?$/;
+
+function alignmentOf(cell: string): 'left' | 'center' | 'right' | null {
+  if (!ALIGN_ROW.test(cell)) return null;
+  const left = cell.startsWith(':');
+  const right = cell.endsWith(':');
+  return left && right ? 'center' : right ? 'right' : 'left';
+}
+
+/**
+ * The first row is the header only when a separator row follows it, as in GFM.
+ * Rows without one still render as a table — the lines are already split into
+ * cells, and a paragraph of pipes is the one thing this exists to avoid.
+ *
+ * It scrolls sideways in its own box rather than widening the feed: a wide
+ * comparison is the common case, and the column beside it must not move.
+ */
+function Table({ rows, viewer }: { rows: string[][]; viewer?: FileViewer }): React.ReactElement {
+  const aligns = rows[1]?.map(alignmentOf) ?? [];
+  const hasHeader = rows.length > 1 && aligns.length > 0 && aligns.every((a) => a !== null);
+  const header = hasHeader ? rows[0] : null;
+  const body = hasHeader ? rows.slice(2) : rows;
+  const alignOf = (i: number): string => {
+    const a = hasHeader ? aligns[i] : null;
+    return a === 'right' ? 'text-right' : a === 'center' ? 'text-center' : 'text-left';
+  };
+  return (
+    <div className="mb-3 overflow-x-auto">
+      <table className="text-sm text-neutral-300">
+        {header && (
+          <thead>
+            <tr>
+              {header.map((cell, i) => (
+                <th
+                  key={i}
+                  className={`border-b border-neutral-700 px-2 py-1 align-bottom font-semibold text-neutral-100 ${alignOf(i)}`}
+                >
+                  {inline(cell, viewer)}
+                </th>
+              ))}
+            </tr>
+          </thead>
+        )}
+        <tbody>
+          {body.map((row, r) => (
+            <tr key={r}>
+              {row.map((cell, i) => (
+                <td key={i} className={`border-b border-neutral-800 px-2 py-1 align-top ${alignOf(i)}`}>
+                  {inline(cell, viewer)}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
 }
 
 /**

@@ -66,7 +66,12 @@ rules apply to everything you do here.
    under it. The cockpit puts a run button on a bash block and nowhere else, so
    an untagged block, an inline code span or a suggestion to type ! followed by
    a command leaves the human copying it by hand. This replaces any other advice
-   you have about how to hand the human a command.
+   you have about how to hand the human a command. A run has no stdin: a prompt
+   reads end-of-file at once, so a confirm takes its default and a password
+   prompt fails. Give the non-interactive form (--yes, -y, --no-pager,
+   --non-interactive, input from a file), and when a command needs a terminal —
+   a login, a password, an editor, a pager — say so, so the human runs it in
+   one instead.
 
 10. Keep a table's cells to a word, a number or a short phrase. When a
    comparison needs whole sentences per cell, do not widen the table: give one

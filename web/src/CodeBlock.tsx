@@ -108,7 +108,7 @@ function Runnable(
           : (
             <button
               onClick={() => setConfirm(true)}
-              title="Runs in a fork of this session (! cmd), which explains the result. The agent never sees it."
+              title="Runs in a fork of this session (! cmd), which explains the result. The agent never sees it. The run has no stdin: a prompt reads end-of-file at once, so a command that needs a terminal must be run in one."
               className="shrink-0 text-[11px] text-neutral-500 hover:text-neutral-200"
             >
               ▶ run

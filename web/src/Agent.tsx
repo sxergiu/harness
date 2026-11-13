@@ -1015,7 +1015,7 @@ const FORKS = {
     title: 'runs',
     placeholder: 'reply to the run fork…',
     verb: 'send',
-    empty: '▶ run a shell block on the left. It runs in a fork of this agent’s session, which explains the result and proposes what to run next — the agent never sees it.',
+    empty: '▶ run a shell block on the left. It runs in a fork of this agent’s session, which explains the result and proposes what to run next — the agent never sees it. A run has no stdin: a prompt reads end-of-file at once, so a command that asks a question takes its default, and one that needs a terminal — a login, a password, an editor — must be run in one.',
   },
 } as const;
 

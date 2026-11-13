@@ -1028,7 +1028,14 @@ three are verified working through that path.
   — the leading space is absent when the run was queued behind a working agent — and only
   once it has finished, so `feedTurns` folds the pair into one `shell` entry and the live
   output while it runs comes off the pane (`shellTail`). **No exit code is recorded
-  anywhere**, so a box shows what was printed and never claims success. **Every `!` costs
+  anywhere**, so a box shows what was printed and never claims success. **A run has NO
+  STDIN.** Measured on 2.1.291 by driving a `claude` in a pty: inside a `!` command
+  `[ -t 0 ]` is false, fd 0 is the null device, and `read -t 5` returned 1 at once rather
+  than timing out. So nothing a run does ever WAITS for input — a `[y/N]` takes its
+  default, a password prompt or a login fails outright — and there is no "stopped on a
+  prompt" state for the panel to detect or a reply box to answer. What the cockpit does
+  instead is say so, on ▶ and in the run panel, and rule 9 asks agents for the
+  non-interactive form and to name the commands that need a terminal. **Every `!` costs
   a model turn of whoever receives it**: it answers the output unprompted — which is why
   runs go to the fork, whose answer is the explanation, and not to the agent. `!` runs Git Bash on
   Windows, so a PowerShell block goes in as `powershell -NoProfile -Command '…'` with a `'`

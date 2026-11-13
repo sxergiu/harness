@@ -41,6 +41,11 @@ export interface Entry {
   /** Set by Claude Code on its own generated `user` entries, not the human's. */
   isMeta?: boolean;
   /**
+   * Who a `user` entry came from, where Claude Code says. Undocumented like
+   * `goal_status`, so it is only ever read through `machineOrigin`.
+   */
+  origin?: unknown;
+  /**
    * Set on an `assistant` entry Claude Code wrote in place of a response
    * because the request failed. The text is the whole error.
    */
@@ -201,6 +206,25 @@ function blocks(e: Entry): Block[] {
   return Array.isArray(c) ? (c as Block[]) : [];
 }
 
+/**
+ * A `user` entry the human did not type, and `isMeta` does not mark.
+ *
+ * A background task finishing and a subagent handing back are both written as
+ * ordinary `user` entries with a bare string — `<task-notification>…` and the
+ * hand-back report — and neither carries `isMeta`, so each read as a prompt the
+ * human had typed, and each opened a turn. Measured on 2.1.x, every user entry
+ * carries `origin.kind`: `human` for the typed prompt, `task-notification`,
+ * `peer` (with `handback: true`) and `auto-continuation` for the rest. The
+ * field is undocumented, so it is read defensively: no `origin`, or one with no
+ * `kind`, is an older Claude Code and still counts as the human.
+ */
+function machineOrigin(e: Entry): boolean {
+  const o = e.origin;
+  if (typeof o !== 'object' || o === null) return false;
+  const kind = (o as { kind?: unknown }).kind;
+  return typeof kind === 'string' && kind !== 'human';
+}
+
 /** User content is sometimes a bare string rather than an array of blocks. */
 function userText(e: Entry): string | null {
   const c = e.message?.content;
@@ -267,7 +291,7 @@ function answeredSince(entries: Entry[], since: number): Entry | null {
   if (!request) return null;
   for (let i = entries.lastIndexOf(request) - 1; i >= 0; i--) {
     const e = entries[i];
-    if (!e || e.isSidechain || e.isMeta || e.type !== 'user' || userText(e) === null) continue;
+    if (!e || e.isSidechain || e.isMeta || machineOrigin(e) || e.type !== 'user' || userText(e) === null) continue;
     return Date.parse(e.timestamp ?? '') > since ? request : null;
   }
   return null;
@@ -444,7 +468,7 @@ export function errorOf(entries: Entry[]): string | null {
     }
     // A real message from the human means they have already seen and moved past
     // it. Claude Code's own generated `user` entries have not.
-    if (e.type === 'user' && !e.isMeta) return null;
+    if (e.type === 'user' && !e.isMeta && !machineOrigin(e)) return null;
   }
   return null;
 }
@@ -718,10 +742,11 @@ export function feedTurns(
       }
 
       // Claude Code writes its own plumbing as `user` entries too — the /clear
-      // caveat, goal Stop-hook notices, command stdout. Rendering those as
-      // things the human said is wrong, and none of them starts a turn.
+      // caveat, goal Stop-hook notices, command stdout, a background task's
+      // notice, a subagent's hand-back. Rendering those as things the human
+      // said is wrong, and none of them starts a turn.
       const stdout = STDOUT_RE.exec(text.trim());
-      if (e.isMeta || stdout) {
+      if (e.isMeta || machineOrigin(e) || stdout) {
         const body = (stdout?.[1] ?? text).trim();
         const turn = current ?? open(e.timestamp ?? null);
         if (body) turn.entries.push({ kind: 'system', text: body });

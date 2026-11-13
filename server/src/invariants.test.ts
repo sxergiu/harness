@@ -457,6 +457,34 @@ test('a run with no output yet, and output with no run, never open a turn of XML
   assert.deepEqual(orphan[0].entries, [{ kind: 'system', text: 'stray' }]);
 });
 
+// -- entries Claude Code wrote in the human's role ---------------------------
+// A task notification and a subagent hand-back are `user` entries without
+// `isMeta`. Read as prompts, each opened a turn the human never typed, and the
+// jump to "your last prompt" landed on a subagent's report.
+
+const from = (content: string, origin: unknown): Entry =>
+  ({ type: 'user', message: { content }, origin }) as unknown as Entry;
+
+test('a user entry with a machine origin is a system line and opens no turn', () => {
+  const turns = feedTurns([
+    from('fix the build', { kind: 'human' }),
+    reply('on it'),
+    from('<task-notification>\n<status>completed</status>\n</task-notification>', { kind: 'task-notification' }),
+    from('[Subagent hand-back] the report', { kind: 'peer', from: 'a8eb', handback: true }),
+    reply('the subagent says…'),
+  ], '/repo');
+  assert.equal(turns.length, 1);
+  assert.deepEqual(turns[0].entries.map((e) => e.kind), ['user', 'text', 'system', 'system', 'text']);
+});
+
+test('no origin, or one without a kind, is an older Claude Code and still the human', () => {
+  for (const origin of [undefined, null, 'human', {}, { kind: 7 }, { host: 'github.com' }]) {
+    const turns = feedTurns([from('hello', origin)], '/repo');
+    assert.equal(turns.length, 1, JSON.stringify(origin));
+    assert.equal(turns[0].entries[0]?.kind, 'user', JSON.stringify(origin));
+  }
+});
+
 test('a block runs as itself, a PowerShell one inside bash quotes, anything else not at all', () => {
   assert.equal(bashMode('  npm test \n', 'bash'), 'npm test');
   // Bash reads `'a''b'` as `ab`: a doubled quote would vanish before PowerShell.

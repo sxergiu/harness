@@ -236,6 +236,15 @@ export interface AgentRow {
    */
   aside: AgentStatus | 'cleared' | null;
   /**
+   * Every fork the board has seen on this agent's CURRENT session, oldest
+   * first, by the session its own transcript is under. Unlike `aside` this is a
+   * record rather than a claim about now, so it rides the row into RECENT by
+   * design: it is the only way back to a fork's exchange once its pane is gone.
+   * Dropped on `/clear`, since a fork of the old session can never be told from
+   * the new transcript; empty for a conversation closed before this existed.
+   */
+  forks: ForkRef[];
+  /**
    * A tint set by hand, for telling apart rows Herdr gives you nothing to tell
    * apart by. It means nothing — that is the point: every other colour on the
    * row is a claim about the agent, and this one is only a claim about you.
@@ -466,6 +475,21 @@ export interface AsideView {
    * it inherits `AgentRow.fileCount`'s blind spots.
    */
   filesWritten: number;
+}
+
+/** A fork the board saw on an agent, by the session its transcript is under. */
+export interface ForkRef {
+  kind: 'aside' | 'run';
+  sessionUuid: string;
+}
+
+/**
+ * A closed agent's forks, read back off disk by the sessions `AgentRow.forks`
+ * recorded. `view` is null when the fork's transcript has been pruned
+ * (invariant 9); nothing is asked of Herdr for any of it.
+ */
+export interface ForksView {
+  forks: Array<ForkRef & { view: AsideView | null }>;
 }
 
 // ---------------------------------------------------------------------------

@@ -971,6 +971,28 @@ test('a version it does not know is discarded rather than guessed at', () => {
   assert.equal(parseRecent('{"version":99,"rows":[{"paneId":"w2:pA","name":"x"}]}').length, 0);
 });
 
+test('a remembered fork is kept by shape, and a row from before the field has none', () => {
+  // The uuid is joined into a path on disk, which is why this one field is
+  // read by shape where the rest are filled: a non-string there throws in
+  // `path.join`, and a kind that is neither fork names no reader.
+  const rows = parseRecent(JSON.stringify({
+    version: 1,
+    rows: [
+      { paneId: 'w2:pA', name: 'old' },
+      { paneId: 'w2:pB', name: 'forked', forks: [
+        { kind: 'aside', sessionUuid: 'a-1' }, { kind: 'run', sessionUuid: 'r-1' },
+        { kind: 'other', sessionUuid: 'x' }, { kind: 'aside', sessionUuid: 7 }, null, 'junk',
+      ] },
+      { paneId: 'w2:pC', name: 'junk', forks: 'not a list' },
+    ],
+  }));
+  assert.deepEqual(rows.map((r) => r.forks), [
+    [],
+    [{ kind: 'aside', sessionUuid: 'a-1' }, { kind: 'run', sessionUuid: 'r-1' }],
+    [],
+  ]);
+});
+
 test('rows missing the two fields the column cannot render without are dropped', () => {
   const rows = parseRecent(JSON.stringify({
     version: 1,

@@ -7,6 +7,7 @@ is that there is one place to change them.
 
 | Version | |
 |---|---|
+| [0.8.0](releases/0.8.0.md) | The macOS folder dialog in front; markdown tables in the feed; ↑/↓ between your prompts; a run has no stdin and agents are told; weekly usage bars named; task notices no longer your prompts; a closed conversation keeps its forks |
 | [0.7.0](releases/0.7.0.md) | Agents hand commands as bash blocks for ▶; preferences held by the server; auto-accept per checkout; folders agents may use without asking; ⚙ marked when a newer harness is out; ⤒ in the fork panel; dependency advisories in a clone |
 | [0.6.0](releases/0.6.0.md) | ↻ wakes agents stalled on API timeouts; ▶ runs go to a run fork; Enter no longer declines an AskUserQuestion; a conversation summary tab; the system folder picker; updating from settings; bare file references; links; a locked prompt box while starting; shades across restarts |
 | [0.5.0](releases/0.5.0.md) | Windows: a launch that never came up holding its agent name off-screen; the prompt box sizes itself to its text; copy text selected in the agent view; the running version in settings |

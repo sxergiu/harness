@@ -117,7 +117,6 @@ export interface ContextUse {
 export interface AgentRow {
   paneId: string;
   workspaceId: string;
-  tabId: string;
   /** Herdr agent name, or a slug we derived from the terminal title. */
   name: string;
   status: AgentStatus;

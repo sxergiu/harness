@@ -700,9 +700,9 @@ export function AgentView(
           </span>
           <button
             disabled={busy !== null}
-            onClick={() => void call('closing…', `/api/tabs/${agent.tabId}/close`)}
+            onClick={() => void call('closing…', `/api/agents/${agent.paneId}/close`)}
             className="shrink-0 rounded bg-neutral-800 px-2 py-0.5 text-neutral-200 hover:bg-neutral-700 disabled:opacity-40"
-            title="Closes the tab. The pane may still say what went wrong — look in Herdr first if you want to know."
+            title="Closes the pane. It may still say what went wrong — look in Herdr first if you want to know."
           >
             close
           </button>

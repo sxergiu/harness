@@ -1376,13 +1376,10 @@ function BoardRow(
   };
 
   /**
-   * Closes the tab, which ends the agent AND removes its pane. `/exit` ends the
+   * Closes the pane, which ends the agent AND removes it. `/exit` ends the
    * session but leaves the pane behind as a bare shell that the cockpit no
    * longer shows — this is the one action that leaves nothing behind, so it
    * always asks first.
-   *
-   * The tab is closed by id rather than the pane, because a tab is what `+`
-   * created.
    */
   const close = async (): Promise<void> => {
     if (!confirming) {
@@ -1392,7 +1389,7 @@ function BoardRow(
     setClosing(true);
     setError(null);
     try {
-      await post(`/api/tabs/${agent.tabId}/close`);
+      await post(`/api/agents/${agent.paneId}/close`);
     } catch (e) {
       setError((e as Error).message);
     } finally {

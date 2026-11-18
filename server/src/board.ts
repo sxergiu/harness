@@ -355,6 +355,11 @@ export class Board {
     return this.rows.get(paneId) ?? this.history.all().find((r) => r.paneId === paneId);
   }
 
+  /** On the board now — never a RECENT row, whose pane id Herdr may have handed on. */
+  showing(paneId: string): boolean {
+    return this.rows.has(paneId);
+  }
+
   /**
    * Notes each of this parent's forks under the session it runs, once. The same
    * fork is in every heartbeat, so a uuid already listed is skipped; a refork
@@ -627,7 +632,6 @@ export class Board {
       const row: AgentRow = {
         paneId: p.pane_id,
         workspaceId: p.workspace_id,
-        tabId: p.tab_id,
         name,
         status,
         cwd: p.cwd,

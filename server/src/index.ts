@@ -1118,12 +1118,21 @@ app.post<{ Params: { id: string } }>('/api/workspaces/:id/close', async (req, re
   }),
 );
 
-app.post<{ Params: { id: string } }>('/api/tabs/:id/close', async (req, reply) =>
-  act(reply, async () => {
-    await herdr.request('tab.close', { tab_id: req.params.id });
+/**
+ * The PANE, never its tab. An agent started by another agent — `herdr agent
+ * start`, or a split — shares its parent's tab, so `tab.close` took the parent
+ * and every sibling with it. `pane.close` on a tab's only pane removes the tab
+ * too, so a tab the cockpit's `+` created still goes.
+ */
+app.post<{ Params: { paneId: string } }>('/api/agents/:paneId/close', async (req, reply) => {
+  if (!board.showing(req.params.paneId)) {
+    return reply.code(404).send({ error: 'no such agent' });
+  }
+  return act(reply, async () => {
+    await herdr.closePane(req.params.paneId);
     board.schedule();
-  }),
-);
+  });
+});
 
 /**
  * The page's switches — see `prefs.ts`. Broadcast rather than only answered, so

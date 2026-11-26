@@ -13,7 +13,7 @@ import { FileView } from './FileView.js';
 import { type Panels, panelsOf, rememberPanels } from './panels.js';
 import { ContextMeter, Spinner, StatusDot, Working } from './Status.js';
 import { SubagentsTab } from './Subagents.js';
-import { SummaryTab } from './Summary.js';
+import { SummaryPanel } from './Summary.js';
 import { modelLabel, modelReading, since, useApi } from './useHarness.js';
 
 /**
@@ -405,6 +405,13 @@ export function AgentView(
   // remembered choice without showing a panel nothing could close.
   const forkOpen = (panels.fork || panels.runs) && agent.live;
   /**
+   * Not in `panels`, so it is not remembered: the summary agent runs only while
+   * this is open and every update is billed, and a remembered panel would bill
+   * one on every visit to an agent whose summary was read once.
+   */
+  const [summaryOpen, setSummaryOpen] = useState(false);
+  const filesOpen = summaryOpen || panels.files.length > 0;
+  /**
    * ▶ runs the feed has handed off and the run panel has not yet taken. The
    * panel does the send, because it is what knows the baseline a run is told
    * apart from an earlier one of the same command by — and a queue rather than
@@ -426,7 +433,7 @@ export function AgentView(
    */
   const shownW: Record<Column, number> = {
     fork: forkOpen ? splitW.fork : 0,
-    files: panels.files.length
+    files: filesOpen
       ? Math.max(
         SPLIT_MIN_W,
         Math.min(splitW.files, (window.innerWidth * SPLIT_MAX_VW) / 100 - (forkOpen ? splitW.fork : 0)),
@@ -609,28 +616,6 @@ export function AgentView(
                   {k}
                 </button>
               ))}
-              {/*
-                Not a tab: an aside is a question ABOUT what the tabs are
-                showing, so it opens beside them rather than over them.
-              */}
-              <button
-                onClick={() => setPanels((s) => ({ ...s, fork: !s.fork }))}
-                className={panels.fork ? 'text-neutral-200' : 'text-neutral-400 hover:text-neutral-200'}
-                title="Ask about this without spending the agent's turn — forks the session, so its feed does not move"
-              >
-                fork
-              </button>
-              <button
-                onClick={() => {
-                  // Shutting drops what is queued, as the panel's own × does.
-                  if (panels.runs) setRunQueue([]);
-                  setPanels((s) => ({ ...s, runs: !s.runs }));
-                }}
-                className={panels.runs ? 'text-neutral-200' : 'text-neutral-400 hover:text-neutral-200'}
-                title="The ▶ runs from this agent's blocks — a fork of its session runs each and explains the result"
-              >
-                runs
-              </button>
               <button
                 onClick={() => open('goal')}
                 className={composing === 'goal' ? 'text-neutral-200' : 'text-neutral-400 hover:text-neutral-200'}
@@ -824,6 +809,42 @@ export function AgentView(
             )}
           </button>
         ))}
+        {/*
+          Not tabs: each is read ABOUT what the tabs are showing, so it opens
+          beside them rather than over them. Lit rather than underlined, so the
+          two kinds of control do not read as one.
+        */}
+        <div className="ml-auto flex gap-3 py-1">
+          <button
+            onClick={() => setSummaryOpen(!summaryOpen)}
+            className={summaryOpen ? 'text-neutral-200' : 'text-neutral-500 hover:text-neutral-200'}
+            title="The conversation's running brief, kept up to date by a haiku agent while this is open"
+          >
+            summary
+          </button>
+          {agent.live && (
+            <>
+              <button
+                onClick={() => setPanels((s) => ({ ...s, fork: !s.fork }))}
+                className={panels.fork ? 'text-neutral-200' : 'text-neutral-500 hover:text-neutral-200'}
+                title="Ask about this without spending the agent's turn — forks the session, so its feed does not move"
+              >
+                fork
+              </button>
+              <button
+                onClick={() => {
+                  // Shutting drops what is queued, as the panel's own × does.
+                  if (panels.runs) setRunQueue([]);
+                  setPanels((s) => ({ ...s, runs: !s.runs }));
+                }}
+                className={panels.runs ? 'text-neutral-200' : 'text-neutral-500 hover:text-neutral-200'}
+                title="The ▶ runs from this agent's blocks — a fork of its session runs each and explains the result"
+              >
+                runs
+              </button>
+            </>
+          )}
+        </div>
       </nav>
 
       {/*
@@ -857,7 +878,6 @@ export function AgentView(
           {tab === 'subagents' && (
             <SubagentsTab paneId={agent.paneId} tick={tick} viewer={viewer} />
           )}
-          {tab === 'summary' && <SummaryTab paneId={agent.paneId} tick={tick} viewer={viewer} />}
           {tab === 'fork' && <ForksTab paneId={agent.paneId} tick={tick} viewer={viewer} />}
         </div>
         {forkOpen && (
@@ -894,16 +914,25 @@ export function AgentView(
             </div>
           </>
         )}
-        {panels.files.length > 0 && (
+        {filesOpen && (
           <>
             {resizer('files')}
-            {/* Newest on top, each an equal share of the height and its own
-                scrollport, so a long file never pushes the rest out of reach. */}
+            {/* The summary over the files, newest on top, each an equal share of
+                the height and its own scrollport, so a long file never pushes the
+                rest out of reach. */}
             <div style={{ width: shownW.files }} className="flex min-w-0 shrink-0 flex-col overflow-hidden">
+              {summaryOpen && (
+                <div className="min-h-0 flex-1 overflow-hidden">
+                  <SummaryPanel paneId={agent.paneId} tick={tick} viewer={viewer} onClose={() => setSummaryOpen(false)} />
+                </div>
+              )}
               {panels.files.map((f, i) => (
                 // Keyed on the path, as the diff's copy button is: a file is
                 // its own panel, never another's content under its heading.
-                <div key={f} className={`min-h-0 flex-1 overflow-hidden ${i ? 'border-t border-neutral-800' : ''}`}>
+                <div
+                  key={f}
+                  className={`min-h-0 flex-1 overflow-hidden ${i || summaryOpen ? 'border-t border-neutral-800' : ''}`}
+                >
                   <FileView
                     paneId={agent.paneId}
                     path={f}
@@ -994,7 +1023,7 @@ interface RunRequest {
  * the split panel — which is a live conversation — has nothing to open, and
  * what is left of them is read back as a tab like the feed is.
  */
-const LIVE_TABS = ['feed', 'diff', 'subagents', 'summary'] as const;
+const LIVE_TABS = ['feed', 'diff', 'subagents'] as const;
 const CLOSED_TABS = [...LIVE_TABS, 'fork'] as const;
 type Tab = (typeof CLOSED_TABS)[number];
 
